@@ -17,7 +17,7 @@ on:
             image:
                 description: GHCR image name
                 type: string
-                default: ghcr.io/openhands/agent-server
+                default: ghcr.io/yusang-park/agent-server
             platforms:
                 description: Target platforms
                 type: string
@@ -315,7 +315,7 @@ jobs:
         runs-on: ${{ matrix.runner }}
 
         env:
-            IMAGE: ${{ inputs.image != '' && inputs.image || 'ghcr.io/openhands/agent-server' }}
+            IMAGE: ${{ inputs.image != '' && inputs.image || 'ghcr.io/yusang-park/agent-server' }}
             BASE_IMAGE: ${{ inputs.base_image != '' && inputs.base_image || matrix.base_image }}
             CUSTOM_TAGS: ${{ matrix.variant }}
             VARIANT: ${{ matrix.variant }}
@@ -474,7 +474,7 @@ jobs:
             matrix:
                 variant: [python, java, golang]
         env:
-            IMAGE: ${{ inputs.image != '' && inputs.image || 'ghcr.io/openhands/agent-server' }}
+            IMAGE: ${{ inputs.image != '' && inputs.image || 'ghcr.io/yusang-park/agent-server' }}
 
         steps:
             - name: Download build info to extract SHORT_SHA
