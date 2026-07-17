@@ -10,6 +10,10 @@ from pathlib import Path
 from openhands.agent_server.config import get_default_config
 from openhands.sdk.logger import get_logger
 from openhands.sdk.utils import sanitized_env
+from openhands.tools.browser_use.definition import (
+    BrowserNavigateAction,
+    BrowserToolSet,
+)
 
 
 logger = get_logger(__name__)
@@ -179,6 +183,20 @@ class DesktopService:
                 logger.error("Error stopping desktop: %s", e)
             finally:
                 self._proc = None
+
+    async def navigate(self, url: str) -> bool:
+        """Open a URL in the shared headed browser used by agent browser tools."""
+        if not await self.start():
+            return False
+        executor = BrowserToolSet.get_or_create_shared_executor()
+        observation = await asyncio.to_thread(
+            executor,
+            BrowserNavigateAction(url=url),
+        )
+        if observation.is_error:
+            logger.error("Browser navigation failed: %s", observation.text)
+            return False
+        return True
 
     def is_running(self) -> bool:
         """Check if desktop is running."""

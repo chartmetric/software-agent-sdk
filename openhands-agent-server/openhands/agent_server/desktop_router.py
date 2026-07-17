@@ -1,9 +1,10 @@
 """Desktop router for agent server API endpoints."""
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import AnyHttpUrl, BaseModel
 
 from openhands.agent_server.desktop_service import get_desktop_service
+from openhands.agent_server.models import Success
 from openhands.sdk.logger import get_logger
 
 
@@ -16,6 +17,12 @@ class DesktopUrlResponse(BaseModel):
     """Response model for Desktop URL."""
 
     url: str | None
+
+
+class DesktopNavigateRequest(BaseModel):
+    """Request to navigate the shared headed browser."""
+
+    url: AnyHttpUrl
 
 
 @desktop_router.get("/url", response_model=DesktopUrlResponse)
@@ -45,3 +52,21 @@ async def get_desktop_url(
     except Exception as e:
         logger.error(f"Error getting desktop URL: {e}")
         raise HTTPException(status_code=500, detail="Failed to get desktop URL")
+
+
+@desktop_router.post("/navigate", response_model=Success)
+async def navigate_desktop(request: DesktopNavigateRequest) -> Success:
+    """Navigate the shared headed browser without running an agent turn."""
+    desktop_service = get_desktop_service()
+    if desktop_service is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Desktop is disabled in configuration. Set enable_vnc=true to enable."
+            ),
+        )
+    if not await desktop_service.navigate(str(request.url)):
+        raise HTTPException(
+            status_code=502, detail="Failed to navigate desktop browser"
+        )
+    return Success()
