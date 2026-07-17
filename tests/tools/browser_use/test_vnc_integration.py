@@ -45,6 +45,16 @@ class TestVNCIntegration:
             executor = BrowserToolExecutor(headless=False)
             assert executor._config["headless"] is False
 
+    def test_vnc_enabled_matches_browser_window_to_desktop_geometry(self):
+        with patch.dict(
+            os.environ,
+            {"OH_ENABLE_VNC": "true", "VNC_GEOMETRY": "1440x900"},
+            clear=False,
+        ):
+            executor = BrowserToolExecutor(headless=True)
+
+        assert executor._config["window_size"] == {"width": 1440, "height": 900}
+
     @pytest.mark.parametrize(
         "env_value", ["true", "True", "TRUE", "1", "yes", "Yes", "YES"]
     )
