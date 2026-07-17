@@ -169,6 +169,15 @@ def test_browser_toolset_create_multiple_calls_share_executor():
         assert isinstance(executor1, BrowserToolExecutor)
 
 
+def test_browser_toolset_reuses_executor_created_by_desktop_api():
+    """Agent tools reuse a browser initialized before the first agent action."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        executor = BrowserToolSet.get_or_create_shared_executor()
+        tools = BrowserToolSet.create(conv_state=_create_test_conv_state(temp_dir))
+
+        assert tools[0].executor is executor
+
+
 def test_browser_toolset_shared_executor_survives_multiple_subagents():
     """Test that N successive BrowserToolSet.create() calls all get the same executor.
 

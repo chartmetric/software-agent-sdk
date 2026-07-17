@@ -896,6 +896,18 @@ class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
         conv_state: "ConversationState",
         **executor_config,
     ) -> "BrowserToolExecutor":
+        return cls.get_or_create_shared_executor(
+            full_output_save_dir=conv_state.env_observation_persistence_dir,
+            **executor_config,
+        )
+
+    @classmethod
+    def get_or_create_shared_executor(
+        cls,
+        full_output_save_dir: str | None = None,
+        **executor_config,
+    ) -> "BrowserToolExecutor":
+        """Return the process-wide browser executor used by agents and desktop APIs."""
         with cls._shared_executor_creation_lock:
             with cls._shared_executor_lock:
                 executor = cls._shared_executor
@@ -907,7 +919,7 @@ class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
             from openhands.tools.browser_use.impl import BrowserToolExecutor
 
             executor = BrowserToolExecutor(
-                full_output_save_dir=conv_state.env_observation_persistence_dir,
+                full_output_save_dir=full_output_save_dir,
                 **executor_config,
             )
             with cls._shared_executor_lock:
