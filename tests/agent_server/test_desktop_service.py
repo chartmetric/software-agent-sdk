@@ -25,6 +25,24 @@ class TestDesktopService:
             assert service.novnc_port == 9999
 
     @pytest.mark.asyncio
+    async def test_navigate_uses_shared_browser_executor(self):
+        service = DesktopService()
+        executor = MagicMock(return_value=MagicMock(is_error=False, text="Navigated"))
+
+        with (
+            patch.object(service, "start", AsyncMock(return_value=True)),
+            patch(
+                "openhands.agent_server.desktop_service.BrowserToolSet.get_or_create_shared_executor",
+                return_value=executor,
+            ),
+        ):
+            result = await service.navigate("https://www.google.com")
+
+        assert result is True
+        action = executor.call_args.args[0]
+        assert action.url == "https://www.google.com"
+
+    @pytest.mark.asyncio
     async def test_start_desktop_already_running(self):
         """Test starting desktop when it's already running."""
         service = DesktopService()

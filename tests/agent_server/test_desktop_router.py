@@ -1,11 +1,16 @@
 """Tests for desktop router."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-from openhands.agent_server.desktop_router import DesktopUrlResponse, get_desktop_url
+from openhands.agent_server.desktop_router import (
+    DesktopNavigateRequest,
+    DesktopUrlResponse,
+    get_desktop_url,
+    navigate_desktop,
+)
 
 
 class TestDesktopRouter:
@@ -96,6 +101,22 @@ class TestDesktopRouter:
 
             assert isinstance(response, DesktopUrlResponse)
             assert response.url is None
+
+    @pytest.mark.asyncio
+    async def test_navigate_desktop_uses_shared_browser(self):
+        mock_service = MagicMock()
+        mock_service.navigate = AsyncMock(return_value=True)
+
+        with patch(
+            "openhands.agent_server.desktop_router.get_desktop_service",
+            return_value=mock_service,
+        ):
+            response = await navigate_desktop(
+                DesktopNavigateRequest.model_validate({"url": "https://www.google.com"})
+            )
+
+        assert response.success is True
+        mock_service.navigate.assert_awaited_once_with("https://www.google.com/")
 
 
 class TestDesktopUrlResponse:
