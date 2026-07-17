@@ -1786,9 +1786,9 @@ class LocalConversation(BaseConversation):
                                     )
                                     self._on_event(feedback_msg)
                                 self._state.execution_status = (
-                                    ConversationExecutionStatus.RUNNING
+                                    ConversationExecutionStatus.IDLE
                                 )
-                                continue
+                                break
                         # No hooks or hooks allowed stopping
                         break
 
@@ -1988,9 +1988,9 @@ class LocalConversation(BaseConversation):
                                     )
                                     self._on_event(feedback_msg)
                                 self._state.execution_status = (
-                                    ConversationExecutionStatus.RUNNING
+                                    ConversationExecutionStatus.IDLE
                                 )
-                                continue
+                                break
                         break
 
                     if self._stuck_detector:
