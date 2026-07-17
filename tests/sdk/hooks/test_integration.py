@@ -823,8 +823,8 @@ class TestStopHookIntegration:
 class TestStopHookConversationIntegration:
     """Integration tests for Stop hook in LocalConversation run loop."""
 
-    def test_stop_hook_denial_injects_feedback_and_continues(self, tmp_path):
-        """Test stop hook denial injects feedback and continues loop."""
+    def test_stop_hook_denial_injects_feedback_and_waits(self, tmp_path):
+        """Test stop hook denial injects feedback and waits for another run."""
         from unittest.mock import patch
 
         from pydantic import SecretStr
@@ -887,15 +887,24 @@ class TestStopHookConversationIntegration:
             # Send a message to start
             conversation.send_message("Hello")
 
-            # Run the conversation
+            # The denied Stop ends this run without reporting completion.
             conversation.run()
+            assert step_count == 1
+            assert (
+                conversation.state.execution_status == ConversationExecutionStatus.IDLE
+            )
+
+            # A later run retries after the blocking condition can be resolved.
+            conversation.run()
+            assert (
+                conversation.state.execution_status
+                == ConversationExecutionStatus.FINISHED
+            )
 
             # Close to trigger session end
             conversation.close()
 
-        # The agent should have been called twice:
-        # 1. First step sets FINISHED, stop hook denies, feedback injected
-        # 2. Second step sets FINISHED, stop hook allows, conversation ends
+        # Each run invokes the agent once instead of retrying in a tight loop.
         assert step_count == 2
 
         # Check that feedback was injected as an environment message with prefix
@@ -911,6 +920,56 @@ class TestStopHookConversationIntegration:
             )
         ]
         assert len(feedback_messages) == 1, "Feedback message should be injected once"
+
+    @pytest.mark.asyncio
+    async def test_async_stop_hook_denial_waits(self, tmp_path):
+        """Test async stop hook denial waits instead of retrying immediately."""
+        from unittest.mock import patch
+
+        from pydantic import SecretStr
+
+        from openhands.sdk.agent import Agent
+        from openhands.sdk.conversation import LocalConversation
+        from openhands.sdk.conversation.state import ConversationExecutionStatus
+        from openhands.sdk.llm import LLM
+
+        command = _json_command(
+            {
+                "decision": "deny",
+                "additionalContext": "Complete the task first",
+            },
+            exit_code=2,
+        )
+        hook_config = HookConfig.from_dict(
+            {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}}
+        )
+        agent = Agent(
+            llm=LLM(model="test-model", api_key=SecretStr("test-key")), tools=[]
+        )
+        step_count = 0
+
+        async def mock_astep(self, conversation, on_event, on_token=None):
+            nonlocal step_count
+            step_count += 1
+            conversation.state.execution_status = ConversationExecutionStatus.FINISHED
+
+        with patch.object(Agent, "astep", mock_astep):
+            conversation = LocalConversation(
+                agent=agent,
+                workspace=tmp_path,
+                hook_config=hook_config,
+                visualizer=None,
+                max_iteration_per_run=10,
+            )
+            conversation.send_message("Hello")
+
+            await conversation.arun()
+
+            assert step_count == 1
+            assert (
+                conversation.state.execution_status == ConversationExecutionStatus.IDLE
+            )
+            conversation.close()
 
 
 class TestHookExecutionEventEmission:

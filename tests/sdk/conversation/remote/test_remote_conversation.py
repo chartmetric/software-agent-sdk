@@ -1088,7 +1088,7 @@ class TestRemoteConversation:
           2. **Lock released** at end of iteration. Client observes
              FINISHED via WS.
           3. Next loop iteration acquires lock, runs stop hooks, hook
-             returns rc=2, status reverts to RUNNING, ``continue``.
+             returns rc=2, and the run ends in IDLE.
 
         With the old implementation, step 2 caused the client's
         ``_wait_for_run_completion`` to ``return`` immediately on the
@@ -1102,17 +1102,13 @@ class TestRemoteConversation:
         conversation_id = str(uuid.uuid4())
         mock_client_instance = self.setup_mock_client(conversation_id=conversation_id)
 
-        # REST poll script: the first 3 polls show the server has flipped
-        # *back* to RUNNING (the stop-hook revert); subsequent polls show
-        # the agent's second finish, which should be honored.
+        # REST polls may remain RUNNING while the Stop hook is evaluated. The
+        # authoritative post-run snapshot then reports IDLE waiting state.
         rest_script = [
             "running",
             "running",
             "running",
-            "finished",
-            "finished",
-            "finished",
-            "finished",
+            "idle",
         ]
         poll_count = [0]
         original_side_effect = mock_client_instance.request.side_effect
@@ -1140,7 +1136,7 @@ class TestRemoteConversation:
                     "stats": {"usage_to_metrics": {}},
                 }
                 if poll_count[0] >= len(rest_script):
-                    ws_callback[0](self.full_state_event("finished"))
+                    ws_callback[0](self.full_state_event("idle"))
                 return response
             return original_side_effect(method, url, **kwargs)
 
@@ -1153,8 +1149,8 @@ class TestRemoteConversation:
 
         conversation.run(blocking=True, poll_interval=0.01)
 
-        # Must have polled past the 3 RUNNING REST responses (race window),
-        # then waited for the post-run full-state snapshot. Pre-fix this would
+        # Must have polled past the RUNNING REST responses (race window), then
+        # waited for the post-run IDLE snapshot. Pre-fix this would
         # have returned on the WS FINISHED injected after the /run trigger with
         # poll_count == 0.
         assert poll_count[0] == len(rest_script), (
@@ -1164,7 +1160,7 @@ class TestRemoteConversation:
     @patch(
         "openhands.sdk.conversation.impl.remote_conversation.WebSocketCallbackClient"
     )
-    def test_remote_conversation_run_rest_finished_revert_waits_for_full_state(
+    def test_remote_conversation_run_rest_finished_waits_for_idle_full_state(
         self, mock_ws_client
     ):
         """Do not return from REST FINISHED when a hook can still veto it."""
@@ -1175,12 +1171,7 @@ class TestRemoteConversation:
             "finished",
             "finished",
             "finished",
-            "running",
-            "running",
-            "finished",
-            "finished",
-            "finished",
-            "finished",
+            "idle",
         ]
         poll_count = [0]
         original_side_effect = mock_client_instance.request.side_effect
@@ -1199,7 +1190,7 @@ class TestRemoteConversation:
                     "stats": {"usage_to_metrics": {}},
                 }
                 if poll_count[0] >= len(rest_script):
-                    ws_callback[0](self.full_state_event("finished"))
+                    ws_callback[0](self.full_state_event("idle"))
                 return response
             return original_side_effect(method, url, **kwargs)
 
