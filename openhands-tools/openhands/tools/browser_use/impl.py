@@ -362,6 +362,16 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             )
             if os.getenv("OH_ENABLE_VNC", "false").lower() in {"true", "1", "yes"}:
                 headless = False  # Force headless off if VNC is enabled
+                window_width, window_height = (
+                    int(dimension)
+                    for dimension in os.getenv("VNC_GEOMETRY", "1280x800").split(
+                        "x", maxsplit=1
+                    )
+                )
+                config["window_size"] = {
+                    "width": window_width,
+                    "height": window_height,
+                }
                 logger.info("VNC is enabled - running browser in non-headless mode")
 
             # Configure scripts to inject
