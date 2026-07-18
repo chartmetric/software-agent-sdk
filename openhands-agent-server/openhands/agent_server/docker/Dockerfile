@@ -314,6 +314,8 @@ RUN set -eux; \
   apt-get install -y --no-install-recommends \
     # GUI bits (remove entirely if headless)
     tigervnc-standalone-server xfce4 dbus-x11 novnc websockify ffmpeg \
+    # Local service dependencies commonly required by repository runtimes
+    redis-server \
     # Browser
     $(if grep -q "ubuntu" /etc/os-release; then echo "chromium-browser"; else echo "chromium"; fi); \
   apt-get clean; rm -rf /var/lib/apt/lists/*
