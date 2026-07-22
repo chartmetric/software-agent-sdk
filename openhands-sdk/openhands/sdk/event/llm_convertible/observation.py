@@ -73,7 +73,7 @@ class ObservationEvent(ObservationBaseEvent):
     def __str__(self) -> str:
         """Plain text string representation for ObservationEvent."""
         base_str = f"{self.__class__.__name__} ({self.source})"
-        content_str = "".join(content_to_str(self.observation.to_llm_content))
+        content_str = self.observation.visualize.plain
         obs_preview = (
             content_str[:N_CHAR_PREVIEW] + "..."
             if len(content_str) > N_CHAR_PREVIEW

@@ -1,3 +1,4 @@
+from browser_use.browser.events import TypeTextEvent
 from browser_use.dom.markdown_extractor import extract_clean_markdown
 
 from openhands.sdk import get_logger
@@ -79,6 +80,25 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
                      Each script will be evaluated before page scripts run.
         """
         self._inject_scripts = scripts
+
+    async def _type_secret_text(self, index: int, text: str) -> str:
+        if not self.browser_session:
+            return "Error: No browser session active"
+
+        element = await self.browser_session.get_dom_element_by_index(index)
+        if not element:
+            return f"Element with index {index} not found"
+
+        event = self.browser_session.event_bus.dispatch(
+            TypeTextEvent(
+                node=element,
+                text=text,
+                is_sensitive=True,
+                sensitive_key_name="secret",
+            )
+        )
+        await event
+        return f"Typed <secret> into element {index}"
 
     async def _inject_scripts_to_session(self) -> None:
         """Inject configured user scripts into the browser session using CDP.

@@ -1,5 +1,6 @@
 """Tests for SecretsManager class."""
 
+import pytest
 from pydantic import SecretStr
 
 from openhands.sdk.conversation.secret_registry import (
@@ -451,3 +452,37 @@ def test_mask_secrets_retries_until_source_succeeds():
     assert secret_registry.mask_secrets_in_output("leak: recovered-value") == (
         "leak: <secret-hidden>"
     )
+def test_get_secret_value_extracts_json_field_and_tracks_it_for_masking():
+    secret_registry = SecretRegistry()
+    secret_registry.update_secrets(
+        {"TEST_ACCOUNT": ('{"email":"qa@example.com","password":"browser-password"}')}
+    )
+
+    email = secret_registry.get_secret_value("TEST_ACCOUNT", "email")
+    value = secret_registry.get_secret_value("TEST_ACCOUNT", "password")
+
+    assert email == "qa@example.com"
+    assert value == "browser-password"
+    assert (
+        secret_registry.mask_secrets_in_output(
+            "Typed qa@example.com and browser-password"
+        )
+        == "Typed <secret-hidden> and <secret-hidden>"
+    )
+
+
+@pytest.mark.parametrize(
+    ("secret", "field"),
+    [
+        ("not-json", "password"),
+        ('["password"]', "password"),
+        ('{"email":"qa@example.com"}', "password"),
+        ('{"password":1234}', "password"),
+    ],
+)
+def test_get_secret_value_rejects_invalid_json_field(secret: str, field: str):
+    secret_registry = SecretRegistry()
+    secret_registry.update_secrets({"TEST_ACCOUNT": secret})
+
+    assert secret_registry.get_secret_value("TEST_ACCOUNT", field) is None
+    assert "TEST_ACCOUNT" not in secret_registry._exported_values

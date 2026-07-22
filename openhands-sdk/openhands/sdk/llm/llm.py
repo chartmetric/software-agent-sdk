@@ -200,6 +200,7 @@ class LLMCallContext:
 
     prompt_cache_key: str | None = None
     session_id: str | None = None
+    log_masker: Callable[[str], str] | None = None
 
 
 class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
@@ -1429,7 +1430,10 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         @self._make_retry_decorator()
         def _one_attempt(**retry_kwargs: Any) -> ModelResponse:
             assert self._telemetry is not None
-            self._telemetry.on_request(telemetry_ctx=telemetry_ctx)
+            self._telemetry.on_request(
+                telemetry_ctx=telemetry_ctx,
+                log_masker=(call_context or self._call_context).log_masker,
+            )
             final_kwargs = {**call_kwargs, **retry_kwargs}
             resp = self._transport_call(
                 messages=formatted_messages,
@@ -1525,7 +1529,10 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         @self._make_retry_decorator()
         async def _one_attempt(**retry_kwargs: Any) -> ModelResponse:
             assert self._telemetry is not None
-            self._telemetry.on_request(telemetry_ctx=telemetry_ctx)
+            self._telemetry.on_request(
+                telemetry_ctx=telemetry_ctx,
+                log_masker=(call_context or self._call_context).log_masker,
+            )
             final_kwargs = {**call_kwargs, **retry_kwargs}
             resp = await self._atransport_call(
                 messages=formatted_messages,
@@ -1641,7 +1648,10 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         @self._make_retry_decorator()
         def _one_attempt(**retry_kwargs: Any) -> ResponsesAPIResponse:
             assert self._telemetry is not None
-            self._telemetry.on_request(telemetry_ctx=telemetry_ctx)
+            self._telemetry.on_request(
+                telemetry_ctx=telemetry_ctx,
+                log_masker=(call_context or self._call_context).log_masker,
+            )
             final_kwargs = {**call_kwargs, **retry_kwargs}
             with self._litellm_modify_params_ctx(self.modify_params):
                 with warnings.catch_warnings():
@@ -1790,7 +1800,10 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
             **retry_kwargs: Any,
         ) -> ResponsesAPIResponse:
             assert self._telemetry is not None
-            self._telemetry.on_request(telemetry_ctx=telemetry_ctx)
+            self._telemetry.on_request(
+                telemetry_ctx=telemetry_ctx,
+                log_masker=(call_context or self._call_context).log_masker,
+            )
             final_kwargs = {**call_kwargs, **retry_kwargs}
             async with self._alitellm_modify_params_ctx(self.modify_params):
                 with warnings.catch_warnings():

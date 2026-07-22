@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 from rich.text import Text
 
 from openhands.sdk.critic.result import CriticResult
@@ -22,6 +22,7 @@ from openhands.sdk.tool.schema import Action
 
 
 class ActionEvent(LLMConvertibleEvent):
+    _runtime_action: Action | None = PrivateAttr(default=None)
     source: SourceType = "agent"
     thought: Sequence[TextContent] = Field(
         ..., description="The thought process of the agent before taking this action"

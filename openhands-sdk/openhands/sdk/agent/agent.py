@@ -682,9 +682,10 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
                 state.execution_status = ConversationExecutionStatus.FINISHED
                 return
 
+        messages_log = json.dumps([m.model_dump() for m in _messages[1:]], indent=2)
         logger.debug(
             "Sending messages to LLM: "
-            f"{json.dumps([m.model_dump() for m in _messages[1:]], indent=2)}"
+            + state.secret_registry.mask_secrets_in_output(messages_log)
         )
 
         try:
@@ -870,9 +871,10 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
                 state.execution_status = ConversationExecutionStatus.FINISHED
                 return
 
+        messages_log = json.dumps([m.model_dump() for m in _messages[1:]], indent=2)
         logger.debug(
             "Sending messages to LLM: "
-            f"{json.dumps([m.model_dump() for m in _messages[1:]], indent=2)}"
+            + state.secret_registry.mask_secrets_in_output(messages_log)
         )
 
         try:
@@ -1117,7 +1119,40 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
         reasoning_content: str | None = None,
         thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] | None = None,
         responses_reasoning_item: ReasoningItemModel | None = None,
+        mask_text: Callable[[str], str] | None = None,
     ) -> None:
+        if mask_text is not None:
+            error = mask_text(error)
+            tool_call = tool_call.model_copy(
+                update={"arguments": mask_text(tool_call.arguments)}
+            )
+            thought = [
+                item.model_copy(update={"text": mask_text(item.text)})
+                for item in thought or []
+            ]
+            reasoning_content = (
+                mask_text(reasoning_content) if reasoning_content else None
+            )
+            thinking_blocks = [
+                block.model_copy(update={"thinking": mask_text(block.thinking)})
+                if isinstance(block, ThinkingBlock)
+                else block
+                for block in thinking_blocks or []
+            ]
+            if responses_reasoning_item is not None:
+                responses_reasoning_item = responses_reasoning_item.model_copy(
+                    update={
+                        "summary": [
+                            mask_text(item) for item in responses_reasoning_item.summary
+                        ],
+                        "content": [
+                            mask_text(item)
+                            for item in responses_reasoning_item.content or []
+                        ]
+                        if responses_reasoning_item.content is not None
+                        else None,
+                    }
+                )
         try:
             json.loads(tool_call.arguments)
         except json.JSONDecodeError:
@@ -1204,18 +1239,19 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
                     reasoning_content=reasoning_content,
                     thinking_blocks=thinking_blocks,
                     responses_reasoning_item=responses_reasoning_item,
+                    mask_text=conversation.state.secret_registry.mask_secrets_in_output,
                 )
                 return
 
             arguments = fix_malformed_tool_arguments(arguments, tool.action_type)
-            normalized_tool_call = tool_call.model_copy(
-                update={
-                    "name": tool_name,
-                    "arguments": json.dumps(arguments),
-                }
+            summary = self._extract_summary(tool.name, arguments, tool=tool)
+            runtime_action: Action = tool.action_from_arguments(arguments)
+            safe_arguments = conversation.state.secret_registry.mask_secrets_in_data(
+                arguments
             )
+            assert isinstance(safe_arguments, dict)
             security_risk = self._extract_security_risk(
-                arguments,
+                safe_arguments,
                 tool.annotations.readOnlyHint if tool.annotations else False,
                 security_analyzer,
             )
@@ -1223,9 +1259,14 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
                 "Unexpected 'security_risk' key found in tool arguments"
             )
 
-            summary = self._extract_summary(tool.name, arguments, tool=tool)
-
-            action: Action = tool.action_from_arguments(arguments)
+            action = tool.action_from_arguments(safe_arguments)
+            normalized_tool_call = tool_call.model_copy(
+                update={
+                    "name": tool_name,
+                    "arguments": json.dumps(safe_arguments),
+                }
+            )
+            summary = conversation.state.secret_registry.mask_secrets_in_output(summary)
 
         except (ValueError, json.JSONDecodeError, ValidationError) as e:
             # normalize_tool_call or Pydantic validation raised an error.
@@ -1260,16 +1301,47 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
                 reasoning_content=reasoning_content,
                 thinking_blocks=thinking_blocks,
                 responses_reasoning_item=responses_reasoning_item,
+                mask_text=conversation.state.secret_registry.mask_secrets_in_output,
             )
             return
+
+        mask_text = conversation.state.secret_registry.mask_secrets_in_output
+        safe_thought = [
+            item.model_copy(update={"text": mask_text(item.text)})
+            for item in thought or []
+        ]
+        safe_reasoning_content = (
+            mask_text(reasoning_content) if reasoning_content else None
+        )
+        safe_thinking_blocks = [
+            block.model_copy(update={"thinking": mask_text(block.thinking)})
+            if isinstance(block, ThinkingBlock)
+            else block
+            for block in thinking_blocks or []
+        ]
+        safe_responses_reasoning_item = responses_reasoning_item
+        if responses_reasoning_item is not None:
+            safe_responses_reasoning_item = responses_reasoning_item.model_copy(
+                update={
+                    "summary": [
+                        mask_text(item) for item in responses_reasoning_item.summary
+                    ],
+                    "content": [
+                        mask_text(item)
+                        for item in responses_reasoning_item.content or []
+                    ]
+                    if responses_reasoning_item.content is not None
+                    else None,
+                }
+            )
 
         # Create initial action event
         action_event = ActionEvent(
             action=action,
-            thought=thought or [],
-            reasoning_content=reasoning_content,
-            thinking_blocks=thinking_blocks or [],
-            responses_reasoning_item=responses_reasoning_item,
+            thought=safe_thought,
+            reasoning_content=safe_reasoning_content,
+            thinking_blocks=safe_thinking_blocks,
+            responses_reasoning_item=safe_responses_reasoning_item,
             tool_name=tool.name,
             tool_call_id=normalized_tool_call.id,
             tool_call=normalized_tool_call,
@@ -1277,6 +1349,8 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
             security_risk=security_risk,
             summary=summary,
         )
+        if safe_arguments != arguments:
+            action_event._runtime_action = runtime_action
 
         # Run critic evaluation if configured
         if self._should_evaluate_with_critic(action):
@@ -1318,15 +1392,16 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
 
         # Execute actions!
         try:
-            if should_enable_observability():
+            execution_action = action_event._runtime_action or action_event.action
+            if should_enable_observability() and action_event._runtime_action is None:
                 tool_name = extract_action_name(action_event)
                 observation: Observation = observe(
                     name=tool_name,
                     span_type="TOOL",
                     metadata={"tool_call_id": action_event.tool_call.id},
-                )(tool)(action_event.action, conversation)
+                )(tool)(execution_action, conversation)
             else:
-                observation = tool(action_event.action, conversation)
+                observation = tool(execution_action, conversation)
             assert isinstance(observation, Observation), (
                 f"Tool '{tool.name}' executor must return an Observation"
             )

@@ -8,12 +8,13 @@ Contains:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.event import MessageEvent
-from openhands.sdk.llm import LLMResponse, Message, TextContent
+from openhands.sdk.llm import LLMResponse, Message, TextContent, ThinkingBlock
 from openhands.sdk.logger import get_logger
 
 
@@ -34,6 +35,51 @@ if TYPE_CHECKING:
     from openhands.sdk.security.analyzer import SecurityAnalyzerBase
 
 logger = get_logger(__name__)
+
+
+def _mask_message(message: Message, mask_text: Callable[[str], str]) -> Message:
+    responses_reasoning_item = message.responses_reasoning_item
+    if responses_reasoning_item is not None:
+        responses_reasoning_item = responses_reasoning_item.model_copy(
+            update={
+                "summary": [
+                    mask_text(item) for item in responses_reasoning_item.summary
+                ],
+                "content": [
+                    mask_text(item) for item in responses_reasoning_item.content or []
+                ]
+                if responses_reasoning_item.content is not None
+                else None,
+            }
+        )
+    return message.model_copy(
+        update={
+            "content": [
+                item.model_copy(update={"text": mask_text(item.text)})
+                if isinstance(item, TextContent)
+                else item
+                for item in message.content
+            ],
+            "tool_calls": [
+                tool_call.model_copy(
+                    update={"arguments": mask_text(tool_call.arguments)}
+                )
+                for tool_call in message.tool_calls or []
+            ]
+            if message.tool_calls is not None
+            else None,
+            "reasoning_content": mask_text(message.reasoning_content)
+            if message.reasoning_content
+            else None,
+            "thinking_blocks": [
+                block.model_copy(update={"thinking": mask_text(block.thinking)})
+                if isinstance(block, ThinkingBlock)
+                else block
+                for block in message.thinking_blocks
+            ],
+            "responses_reasoning_item": responses_reasoning_item,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +369,9 @@ class ResponseDispatchMixin:
         on_event: ConversationCallbackType,
     ) -> MessageEvent:
         """Create and emit a MessageEvent, running critic if configured."""
+        message = _mask_message(
+            message, conversation.state.secret_registry.mask_secrets_in_output
+        )
         msg_event = MessageEvent(
             source="agent",
             llm_message=message,
