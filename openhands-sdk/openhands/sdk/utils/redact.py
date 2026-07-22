@@ -289,7 +289,9 @@ def redact_text_secrets(text: str) -> str:
     Redacts:
     - ``api_key='...'`` patterns
     - Dict entries whose keys contain KEY, SECRET, TOKEN, or PASSWORD
+    - Shell and dotenv assignments with secret-bearing variable names
     - URL query params matching common secret names
+    - Credentials embedded in HTTP URLs
     - Authorization and X-Session-API-Key header values
 
     Args:
@@ -314,6 +316,17 @@ def redact_text_secrets(text: str) -> str:
         text,
     )
 
+    # Shell and dotenv assignments, including quoted values and export output.
+    text = re.sub(
+        r"\b((?:export\s+)?[A-Z_][A-Z0-9_]*"
+        r"(?:AUTHORIZATION|COOKIE|CREDENTIAL|KEY|PASSWORD|SECRET|SESSION|TOKEN)"
+        r"[A-Z0-9_]*\s*=\s*)"
+        r"(?:'[^'\r\n]*'|\"[^\"\r\n]*\"|[^\s\r\n;]+)",
+        r"\g<1><redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
+
     # URL query params
     text = re.sub(
         r"((?:tavilyApiKey|apiKey|api_key|token|access_token|secret|key)=)"
@@ -336,6 +349,8 @@ def redact_text_secrets(text: str) -> str:
         r"\g<1><redacted>\2",
         text,
     )
+
+    text = redact_url_credentials_in_text(text)
 
     # Bare API key literals (common provider formats)
     text = redact_api_key_literals(text)

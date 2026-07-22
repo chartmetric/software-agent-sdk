@@ -9,6 +9,7 @@ from libtmux.exc import LibTmuxException, TmuxObjectDoesNotExist
 from openhands.sdk.llm import TextContent
 from openhands.sdk.logger import get_logger
 from openhands.sdk.tool import ToolExecutor
+from openhands.sdk.utils.redact import redact_text_secrets
 
 
 if TYPE_CHECKING:
@@ -366,20 +367,23 @@ class TerminalExecutor(ToolExecutor[TerminalAction, TerminalObservation]):
         content_text = observation.text
 
         if content_text and conversation is not None:
+            masked_content = content_text
             try:
                 secret_registry = conversation.state.secret_registry
-                masked_content = secret_registry.mask_secrets_in_output(content_text)
-                if masked_content:
-                    data = observation.model_dump(
-                        exclude={"content", "full_output_save_dir"}
-                    )
-                    return TerminalObservation.from_text(
-                        text=masked_content,
-                        full_output_save_dir=self.full_output_save_dir,
-                        **data,
-                    )
+                masked_content = secret_registry.mask_secrets_in_output(masked_content)
             except Exception:
                 pass
+
+            masked_content = redact_text_secrets(masked_content)
+            if masked_content:
+                data = observation.model_dump(
+                    exclude={"content", "full_output_save_dir"}
+                )
+                return TerminalObservation.from_text(
+                    text=masked_content,
+                    full_output_save_dir=self.full_output_save_dir,
+                    **data,
+                )
 
         return observation
 
