@@ -2,6 +2,7 @@
 
 from openhands.sdk.utils.redact import (
     SENSITIVE_URL_PARAMS,
+    redact_text_secrets,
     redact_url_credentials,
     redact_url_credentials_in_text,
     redact_url_params,
@@ -251,3 +252,29 @@ class TestRedactUrlCredentialsInText:
         """For a bare whole-URL string both helpers agree."""
         url = "https://oauth2:SECRET@gitlab.com/org/repo.git"
         assert redact_url_credentials_in_text(url) == redact_url_credentials(url)
+
+
+class TestRedactTextSecrets:
+    def test_redacts_shell_secret_assignments(self):
+        text = (
+            "export DB_HOST=db.example.com "
+            "export DB_PASSWORD='database-password'"
+            'export API_TOKEN="api-token" SESSION_SECRET=session-secret'
+        )
+
+        result = redact_text_secrets(text)
+
+        assert "DB_HOST=db.example.com" in result
+        assert "database-password" not in result
+        assert "api-token" not in result
+        assert "session-secret" not in result
+        assert result.count("<redacted>") == 3
+
+    def test_redacts_credentials_in_url_text(self):
+        result = redact_text_secrets(
+            "DATABASE_URL=https://database-user:database-password@db.example.com/app"
+        )
+
+        assert "database-user" not in result
+        assert "database-password" not in result
+        assert "DATABASE_URL=https://****@db.example.com/app" == result

@@ -89,3 +89,51 @@ def test_terminal_executor_with_conversation_secrets():
         finally:
             executor.close()
             conversation.close()
+
+
+def test_terminal_executor_masks_unregistered_environment_secrets():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        conversation = Conversation(
+            agent=Agent(
+                llm=LLM(
+                    model="gpt-4o-mini",
+                    api_key=SecretStr("test-key"),
+                    usage_id="test-llm",
+                ),
+                tools=[],
+            ),
+            workspace=temp_dir,
+            persistence_dir=temp_dir,
+        )
+        executor = TerminalExecutor(working_dir=temp_dir, terminal_type="subprocess")
+
+        try:
+            mock_session = Mock()
+            mock_session.execute.return_value = TerminalObservation(
+                command="cat runtime.env",
+                exit_code=0,
+                content=[
+                    TextContent(
+                        text=(
+                            "export DB_HOST=db.example.com "
+                            "export DB_PASSWORD='database-password'"
+                            "export SESSION_SECRET=session-secret"
+                        )
+                    )
+                ],
+            )
+            mock_session._closed = False
+            executor._session = mock_session
+
+            result = executor(
+                TerminalAction(command="cat runtime.env"),
+                conversation=conversation,
+            )
+
+            assert "DB_HOST=db.example.com" in result.text
+            assert "database-password" not in result.text
+            assert "session-secret" not in result.text
+            assert result.text.count("<redacted>") == 2
+        finally:
+            executor.close()
+            conversation.close()
