@@ -1411,6 +1411,7 @@ class LocalConversation(BaseConversation):
         return LLMCallContext(
             prompt_cache_key=self._prompt_cache_key or conv_id,
             session_id=conv_id,
+            log_masker=self._state.secret_registry.mask_secrets_in_output,
         )
 
     def _bind_conversation_context(self, llm: LLM) -> None:

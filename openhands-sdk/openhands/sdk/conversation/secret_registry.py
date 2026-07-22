@@ -1,6 +1,8 @@
 """Secrets manager for handling sensitive data in conversations."""
 
+import json
 from collections.abc import Collection, Mapping
+from typing import Any
 
 from pydantic import Field, PrivateAttr, SecretStr
 
@@ -147,9 +149,20 @@ class SecretRegistry(OpenHandsModel):
 
         # First, mask using currently exported values (always available)
         for value in self._exported_values.values():
-            masked_text = masked_text.replace(value, "<secret-hidden>")
+            if value:
+                masked_text = masked_text.replace(value, "<secret-hidden>")
 
         return masked_text
+
+    def mask_secrets_in_data(self, value: Any) -> Any:
+        """Mask resolved secret values in JSON-compatible data."""
+        if isinstance(value, str):
+            return self.mask_secrets_in_output(value)
+        if isinstance(value, list):
+            return [self.mask_secrets_in_data(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self.mask_secrets_in_data(item) for key, item in value.items()}
+        return value
 
     def get_secret_infos(self) -> list[dict[str, str | None]]:
         """Get secret information (name and description) for prompt inclusion.
@@ -167,7 +180,7 @@ class SecretRegistry(OpenHandsModel):
             secret_infos.append({"name": name, "description": description})
         return secret_infos
 
-    def get_secret_value(self, name: str) -> str | None:
+    def get_secret_value(self, name: str, json_field: str | None = None) -> str | None:
         """Look up a single secret value by name.
 
         This method retrieves the value of a specific secret. It's designed
@@ -179,6 +192,7 @@ class SecretRegistry(OpenHandsModel):
 
         Args:
             name: The name of the secret to retrieve.
+            json_field: Optional top-level JSON field to retrieve from the secret.
 
         Returns:
             The secret value if found and successfully retrieved, None otherwise.
@@ -193,8 +207,19 @@ class SecretRegistry(OpenHandsModel):
         try:
             value = source.get_value()
             if value:
+                if json_field is not None:
+                    parsed = json.loads(value)
+                    if not isinstance(parsed, dict):
+                        raise TypeError("Secret is not a JSON object")
+                    value = parsed[json_field]
+                    if not isinstance(value, str):
+                        raise TypeError("Secret JSON field is not a string")
                 # Track retrieved value for output masking
-                self._exported_values[name] = value
+                if value:
+                    exported_name = (
+                        f"{name}.{json_field}" if json_field is not None else name
+                    )
+                    self._exported_values[exported_name] = value
             return value
         except (OSError, TimeoutError) as e:
             # Network/IO errors - likely transient, log and return None

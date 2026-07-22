@@ -26,7 +26,9 @@ from openhands.sdk.utils.async_executor import AsyncExecutor
 from openhands.tools.browser_use.definition import (
     BROWSER_RECORDING_OUTPUT_DIR,
     BrowserAction,
+    BrowserGetSecretAction,
     BrowserObservation,
+    BrowserTypeAction,
 )
 from openhands.tools.browser_use.server import CustomBrowserUseServer
 from openhands.tools.browser_use.video_recording import BrowserVideoRecorder
@@ -421,7 +423,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
     def __call__(
         self,
         action: BrowserAction,
-        conversation: LocalConversation | None = None,  # noqa: ARG002
+        conversation: LocalConversation | None = None,
     ):
         """Submit an action to run in the background loop and wait for result."""
         # Use a shorter timeout on the last retry before a reset would trigger,
@@ -432,25 +434,95 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             else self._action_timeout_seconds
         )
 
-        try:
-            result = self._async_executor.run_async(
-                self._execute_action,
-                action,
-                timeout=effective_timeout,
+        secret_text: str | None = None
+        mask_text: Callable[[str], str] | None = None
+        if conversation is not None:
+            secret_registry = conversation.state.secret_registry
+            mask_text = secret_registry.mask_secrets_in_output
+            if isinstance(action, BrowserGetSecretAction):
+                secret_text = secret_registry.get_secret_value(
+                    action.secret_name, action.json_field
+                )
+                if secret_text is None:
+                    return BrowserObservation.from_text(
+                        text="Unable to resolve the registered browser secret",
+                        is_error=True,
+                        full_output_save_dir=self.full_output_save_dir,
+                    )
+                return BrowserObservation.from_secret(
+                    secret_text,
+                    full_output_save_dir=self.full_output_save_dir,
+                )
+            if isinstance(action, BrowserTypeAction):
+                if action.secret_name is not None:
+                    secret_text = secret_registry.get_secret_value(
+                        action.secret_name, action.json_field
+                    )
+                    if secret_text is None:
+                        return BrowserObservation.from_text(
+                            text="Unable to resolve the registered browser secret",
+                            is_error=True,
+                            full_output_save_dir=self.full_output_save_dir,
+                        )
+                elif action.text is not None:
+                    masked_text = mask_text(action.text)
+                    if masked_text != action.text:
+                        secret_text = action.text
+        elif isinstance(action, (BrowserGetSecretAction, BrowserTypeAction)) and (
+            isinstance(action, BrowserGetSecretAction) or action.secret_name is not None
+        ):
+            return BrowserObservation.from_text(
+                text="Unable to resolve the registered browser secret",
+                is_error=True,
+                full_output_save_dir=self.full_output_save_dir,
             )
+
+        try:
+            if mask_text is None:
+                result = self._async_executor.run_async(
+                    self._execute_action,
+                    action,
+                    timeout=effective_timeout,
+                )
+            else:
+                result = self._async_executor.run_async(
+                    self._execute_action,
+                    action,
+                    secret_text,
+                    mask_text,
+                    timeout=effective_timeout,
+                )
         except builtins.TimeoutError as error:
             # Timeouts indicate the browser may be dead/hung — track them
             # for crash detection. Regular action errors (invalid selector,
             # missing element) are NOT counted since those are normal agent
             # mistakes, not browser crashes.
-            return self._handle_timeout_failure(
-                _format_browser_operation_error(
-                    error, timeout_seconds=effective_timeout
-                )
+            error_text = _format_browser_operation_error(
+                error, timeout_seconds=effective_timeout
             )
+            if mask_text is not None:
+                error_text = mask_text(error_text)
+            return self._handle_timeout_failure(error_text)
 
         self._consecutive_failures = 0
-        return result
+        return self._mask_observation(result, mask_text)
+
+    def _mask_observation(
+        self,
+        observation: BrowserObservation,
+        mask_text: Callable[[str], str] | None,
+    ) -> BrowserObservation:
+        if mask_text is None or not observation.text:
+            return observation
+        masked_text = mask_text(observation.text)
+        if masked_text == observation.text:
+            return observation
+        data = observation.model_dump(exclude={"content", "full_output_save_dir"})
+        return BrowserObservation.from_text(
+            text=masked_text,
+            full_output_save_dir=self.full_output_save_dir,
+            **data,
+        )
 
     def _handle_timeout_failure(self, error_text: str) -> BrowserObservation:
         """Track consecutive timeout failures and reset session if needed."""
@@ -493,7 +565,12 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             full_output_save_dir=self.full_output_save_dir,
         )
 
-    async def _execute_action(self, action):
+    async def _execute_action(
+        self,
+        action,
+        secret_text: str | None = None,
+        mask_text: Callable[[str], str] | None = None,
+    ):
         """Execute browser action asynchronously."""
         from openhands.tools.browser_use.definition import (
             BrowserClickAction,
@@ -512,7 +589,6 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             BrowserStopRecordingAction,
             BrowserStopVideoRecordingAction,
             BrowserSwitchTabAction,
-            BrowserTypeAction,
         )
 
         try:
@@ -523,7 +599,12 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             elif isinstance(action, BrowserClickAction):
                 result = await self.click(action.index, action.new_tab)
             elif isinstance(action, BrowserTypeAction):
-                result = await self.type_text(action.index, action.text)
+                if secret_text is not None:
+                    result = await self.type_secret_text(action.index, secret_text)
+                else:
+                    if action.text is None:
+                        raise ValueError("Browser text was not provided")
+                    result = await self.type_text(action.index, action.text)
             elif isinstance(action, BrowserGetStateAction):
                 return await self.get_state(action.include_screenshot)
             elif isinstance(action, BrowserGetStorageAction):
@@ -567,7 +648,11 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             )
         except Exception as error:
             error_msg = _format_browser_operation_error(error)
-            logging.error(error_msg, exc_info=True)
+            if mask_text is not None:
+                error_msg = mask_text(error_msg)
+                logging.error(error_msg)
+            else:
+                logging.error(error_msg, exc_info=True)
             return BrowserObservation.from_text(
                 text=error_msg,
                 is_error=True,
@@ -608,6 +693,10 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         """Type text into an element."""
         await self._ensure_initialized()
         return await self._server._type_text(index, text)
+
+    async def type_secret_text(self, index: int, text: str) -> str:
+        await self._ensure_initialized()
+        return await self._server._type_secret_text(index, text)
 
     async def scroll(self, direction: str = "down") -> str:
         """Scroll the page."""

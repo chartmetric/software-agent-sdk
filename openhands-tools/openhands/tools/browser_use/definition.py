@@ -9,7 +9,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr, model_validator
+from rich.text import Text
 
 from openhands.sdk.llm import ImageContent, TextContent
 from openhands.sdk.tool import (
@@ -60,6 +61,8 @@ def detect_image_mime_type(base64_data: str) -> str:
 class BrowserObservation(Observation):
     """Base observation for browser operations."""
 
+    _runtime_secret_value: str | None = PrivateAttr(default=None)
+
     screenshot_data: str | None = Field(
         default=None, description="Base64 screenshot data if available"
     )
@@ -67,6 +70,18 @@ class BrowserObservation(Observation):
         default=None,
         description="Directory where full output files are saved",
     )
+
+    @classmethod
+    def from_secret(cls, value: str, **kwargs) -> Self:
+        observation = cls.from_text(text="<secret-hidden>", **kwargs)
+        observation._runtime_secret_value = value
+        return observation
+
+    @property
+    def visualize(self) -> Text:
+        if self._runtime_secret_value is not None:
+            return Text(self.text)
+        return super().visualize
 
     def _save_screenshot(self, base64_data: str, save_dir: str) -> str | None:
         try:
@@ -100,7 +115,7 @@ class BrowserObservation(Observation):
             llm_content.append(TextContent(text=self.ERROR_MESSAGE_HEADER))
 
         # Get text content and truncate if needed
-        content_text = self.text
+        content_text = self._runtime_secret_value or self.text
         if content_text:
             llm_content.append(
                 TextContent(
@@ -253,17 +268,38 @@ class BrowserTypeAction(BrowserAction):
     index: int = Field(
         ge=0, description="The index of the input element (from browser_get_state)"
     )
-    text: str = Field(description="The text to type")
+    text: str | None = Field(default=None, description="Literal text to type")
+    secret_name: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Registered secret name whose value should be typed",
+    )
+    json_field: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional top-level JSON field to type from the registered secret",
+    )
+
+    @model_validator(mode="after")
+    def validate_input_source(self):
+        if (self.text is None) == (self.secret_name is None):
+            raise ValueError("Provide exactly one of text or secret_name")
+        if self.json_field is not None and self.secret_name is None:
+            raise ValueError("json_field requires secret_name")
+        return self
 
 
 BROWSER_TYPE_DESCRIPTION = """Type text into an input field.
 
 Use this tool to enter text into form fields, search boxes, or other text input elements.
-The index comes from the browser_get_state tool output.
+The index comes from the browser_get_state tool output. For credentials, either use a
+value returned by browser_get_secret or reference a registered secret directly.
 
 Parameters:
 - index: The index of the input element (from browser_get_state)
-- text: The text to type
+- text: Literal text to type, including a value returned by browser_get_secret
+- secret_name: Registered secret name whose value should be typed
+- json_field: Optional top-level JSON string field to type from the registered secret
 
 Important: Only use indices that appear in your current browser_get_state output.
 """  # noqa: E501
@@ -285,6 +321,53 @@ class BrowserTypeTool(ToolDefinition[BrowserTypeAction, BrowserObservation]):
                     destructiveHint=False,
                     idempotentHint=False,
                     openWorldHint=True,
+                ),
+                executor=executor,
+            )
+        ]
+
+
+# ============================================
+# `browser_get_secret`
+# ============================================
+class BrowserGetSecretAction(BrowserAction):
+    """Schema for retrieving a registered secret for browser use."""
+
+    secret_name: str = Field(min_length=1, description="Registered secret name")
+    json_field: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional top-level JSON string field to retrieve",
+    )
+
+
+BROWSER_GET_SECRET_DESCRIPTION = """Retrieve a registered secret for browser input.
+
+The raw value is returned only to the live model context. Use the returned value in a
+subsequent browser_type call. Persisted events and logs mask the value.
+
+Parameters:
+- secret_name: Registered secret name
+- json_field: Optional top-level JSON string field to retrieve
+"""
+
+
+class BrowserGetSecretTool(ToolDefinition[BrowserGetSecretAction, BrowserObservation]):
+    """Tool for retrieving a registered secret at runtime."""
+
+    @classmethod
+    def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
+        return [
+            cls(
+                description=BROWSER_GET_SECRET_DESCRIPTION,
+                action_type=BrowserGetSecretAction,
+                observation_type=BrowserObservation,
+                annotations=ToolAnnotations(
+                    title="browser_get_secret",
+                    readOnlyHint=True,
+                    destructiveHint=False,
+                    idempotentHint=True,
+                    openWorldHint=False,
                 ),
                 executor=executor,
             )
@@ -941,6 +1024,7 @@ class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
             BrowserClickTool,
             BrowserGetStateTool,
             BrowserGetContentTool,
+            BrowserGetSecretTool,
             BrowserTypeTool,
             BrowserScrollTool,
             BrowserGoBackTool,

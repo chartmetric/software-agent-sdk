@@ -49,6 +49,7 @@ class Telemetry(BaseModel):
         default=None
     )
     _stats_update_callback: Callable[[], None] | None = PrivateAttr(default=None)
+    _log_masker: Callable[[str], str] | None = PrivateAttr(default=None)
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
         extra="forbid", arbitrary_types_allowed=True
@@ -75,9 +76,14 @@ class Telemetry(BaseModel):
         """
         self._stats_update_callback = callback
 
-    def on_request(self, telemetry_ctx: dict | None) -> None:
+    def on_request(
+        self,
+        telemetry_ctx: dict | None,
+        log_masker: Callable[[str], str] | None = None,
+    ) -> None:
         self._req_start = time.time()
         self._req_ctx = telemetry_ctx or {}
+        self._log_masker = log_masker
 
     def on_response(
         self,
@@ -152,7 +158,9 @@ class Telemetry(BaseModel):
             data["latency_sec"] = self._last_latency
             data["cost"] = 0.0
 
-            log_data = json.dumps(data, default=_safe_json, ensure_ascii=False)
+            log_data = self._mask_log_data(
+                json.dumps(data, default=_safe_json, ensure_ascii=False)
+            )
 
             if self._log_completions_callback:
                 self._log_completions_callback(filename, log_data)
@@ -366,7 +374,9 @@ class Telemetry(BaseModel):
             ):
                 data["kwargs"].pop("tools")
 
-            log_data = json.dumps(data, default=_safe_json, ensure_ascii=False)
+            log_data = self._mask_log_data(
+                json.dumps(data, default=_safe_json, ensure_ascii=False)
+            )
 
             # Use callback if set (for remote execution), otherwise write to file
             if self._log_completions_callback:
@@ -381,6 +391,11 @@ class Telemetry(BaseModel):
                     f.write(log_data)
         except Exception as e:
             warnings.warn(f"Telemetry logging failed: {e}")
+
+    def _mask_log_data(self, log_data: str) -> str:
+        if self._log_masker is None:
+            return log_data
+        return self._log_masker(log_data)
 
 
 def _safe_json(obj: Any) -> Any:
