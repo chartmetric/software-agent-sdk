@@ -97,6 +97,38 @@ logger = get_logger(__name__)
 maybe_init_laminar()
 
 
+def _default_summary(tool_name: str, arguments: dict) -> str:
+    """Build a readable fallback summary for a tool call.
+
+    Used when the LLM omits the optional ``summary`` argument. Dumping the
+    raw argument JSON here leaks tool-call internals into user-facing
+    surfaces (chat event titles, status lines), so prefer the most
+    descriptive string argument instead.
+    """
+    max_len = 80
+
+    def clip(text: str) -> str:
+        text = " ".join(text.split())
+        if len(text) <= max_len:
+            return text
+        return text[: max_len - 1] + "…"
+
+    # Argument names that usually carry the most descriptive value,
+    # in preference order.
+    for key in ("command", "path", "url", "pattern", "query", "name"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return f"{tool_name}: {clip(value)}"
+    for key, value in arguments.items():
+        # A "summary" entry here is a tool-declared parameter the LLM left
+        # empty or invalid, never a usable description.
+        if key == "summary":
+            continue
+        if isinstance(value, str) and value.strip():
+            return f"{tool_name}: {clip(value)}"
+    return tool_name
+
+
 def _tool_has_summary_param(tool: ToolDefinition) -> bool:
     """Return True if the tool's own schema declares ``summary`` as a parameter.
 
@@ -1094,8 +1126,7 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
             summary = arguments.get("summary")
             if isinstance(summary, str) and summary.strip():
                 return summary.strip()
-            args_str = json.dumps(arguments)
-            return f"{tool_name}: {args_str}"
+            return _default_summary(tool_name, arguments)
 
         summary = arguments.pop("summary", None)
 
@@ -1103,9 +1134,7 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
         if summary is not None and isinstance(summary, str) and summary.strip():
             return summary
 
-        # Generate default summary: {tool_name}: {arguments}
-        args_str = json.dumps(arguments)
-        return f"{tool_name}: {args_str}"
+        return _default_summary(tool_name, arguments)
 
     def _emit_tool_error(
         self,
