@@ -1,6 +1,7 @@
 """Comprehensive tests for event serialization and deserialization."""
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -49,6 +50,12 @@ def test_event_base_serialization() -> None:
     json_data = event.model_dump_json()
     deserialized = EventSerializationMockEvent.model_validate_json(json_data)
     assert deserialized == event
+
+
+def test_event_default_timestamp_is_utc() -> None:
+    event = EventSerializationMockEvent(source="agent")
+
+    assert datetime.fromisoformat(event.timestamp).tzinfo == UTC
 
 
 def test_system_prompt_event_serialization() -> None:

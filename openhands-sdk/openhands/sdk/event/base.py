@@ -1,6 +1,5 @@
 import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import ConfigDict, Field, field_validator
@@ -8,6 +7,7 @@ from rich.text import Text
 
 from openhands.sdk.event.types import ROOT_PARENT_ID, EventID, SourceType
 from openhands.sdk.llm import ImageContent, Message, TextContent
+from openhands.sdk.utils import utc_now
 from openhands.sdk.utils.models import DiscriminatedUnionMixin
 
 
@@ -26,7 +26,7 @@ class Event(DiscriminatedUnionMixin, ABC):
         description="Unique event id (ULID/UUID)",
     )
     timestamp: str = Field(
-        default_factory=lambda: datetime.now().isoformat(),
+        default_factory=lambda: utc_now().isoformat(),
         description="Event timestamp",
     )  # consistent with V1
     source: SourceType = Field(..., description="The source of this event")
