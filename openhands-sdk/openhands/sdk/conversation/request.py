@@ -66,6 +66,10 @@ class SendMessageRequest(BaseModel):
 
     role: Literal["user", "system", "assistant", "tool"] = "user"
     content: list[TextContent | ImageContent] = Field(default_factory=list)
+    sender: str | None = Field(
+        default=None,
+        description="Optional identifier of the message sender",
+    )
     run: bool = Field(
         default=False,
         description="Whether the agent loop should automatically run if not running",

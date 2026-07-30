@@ -872,6 +872,20 @@ class TestEventServiceSendMessage:
             assert mock_loop.run_in_executor.call_count == 1  # Only send_message call
 
     @pytest.mark.asyncio
+    async def test_send_message_forwards_sender(self, event_service):
+        conversation = MagicMock()
+        event_service._conversation = conversation
+        message = Message(role="user", content=[])
+
+        await event_service.send_message(
+            message,
+            run=False,
+            sender="frontend-user",
+        )
+
+        conversation.send_message.assert_called_once_with(message, "frontend-user")
+
+    @pytest.mark.asyncio
     async def test_send_message_with_run_true_agent_already_running(
         self, event_service
     ):

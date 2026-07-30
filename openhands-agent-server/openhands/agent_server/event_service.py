@@ -699,7 +699,11 @@ class EventService:
         return results
 
     async def send_message(
-        self, message: Message, run: bool = False, _from_goal_loop: bool = False
+        self,
+        message: Message,
+        run: bool = False,
+        sender: str | None = None,
+        _from_goal_loop: bool = False,
     ):
         if not self._conversation:
             raise ValueError("inactive_service")
@@ -709,7 +713,12 @@ class EventService:
             await self.stop_goal_loop()
         explicit_interrupt_generation = self._explicit_interrupt_generation
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._conversation.send_message, message)
+        if sender is None:
+            await loop.run_in_executor(None, self._conversation.send_message, message)
+        else:
+            await loop.run_in_executor(
+                None, self._conversation.send_message, message, sender
+            )
         if run:
             if self._explicit_interrupt_generation != explicit_interrupt_generation:
                 return

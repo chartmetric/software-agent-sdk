@@ -646,6 +646,35 @@ def test_remote_conversation_over_real_server(server_env, patched_llm):
         shutil.rmtree(cwd_conversations)
 
 
+def test_remote_message_sender_is_emitted_by_live_server(server_env):
+    llm = LLM(model="gpt-4o-mini", api_key=SecretStr("test"))
+    workspace = RemoteWorkspace(
+        host=server_env["host"], working_dir="/tmp/workspace/project"
+    )
+    conversation: RemoteConversation = Conversation(
+        agent=Agent(llm=llm, tools=[]), workspace=workspace
+    )
+
+    try:
+        conversation.send_message("Hello", sender="frontend-user")
+
+        user_messages: list[MessageEvent] = []
+        for _ in range(50):
+            user_messages = [
+                event
+                for event in conversation.state.events
+                if isinstance(event, MessageEvent) and event.source == "user"
+            ]
+            if user_messages:
+                break
+            time.sleep(0.1)
+
+        assert user_messages
+        assert user_messages[-1].sender == "frontend-user"
+    finally:
+        conversation.close()
+
+
 def test_openai_chat_completions_gateway_over_real_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patched_llm
 ):

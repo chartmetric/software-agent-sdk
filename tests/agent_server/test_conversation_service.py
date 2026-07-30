@@ -36,6 +36,7 @@ from openhands.agent_server.models import (
 from openhands.agent_server.utils import safe_rmtree as _safe_rmtree
 from openhands.sdk import LLM, Agent, Message
 from openhands.sdk.agent.acp_agent import ACPAgent
+from openhands.sdk.conversation.request import SendMessageRequest
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
     ConversationState,
@@ -1429,6 +1430,48 @@ class TestConversationServiceCountConversations:
 
 class TestConversationServiceStartConversation:
     """Test cases for ConversationService.start_conversation method."""
+
+    @pytest.mark.asyncio
+    async def test_start_conversation_forwards_initial_message_sender(
+        self, conversation_service
+    ):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            initial_message = SendMessageRequest(
+                content=[TextContent(text="Hello")],
+                sender="frontend-user",
+            )
+            request = StartConversationRequest(
+                agent=Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[]),
+                workspace=LocalWorkspace(working_dir=temp_dir),
+                confirmation_policy=NeverConfirm(),
+                initial_message=initial_message,
+            )
+            mock_event_service = AsyncMock(spec=EventService)
+            mock_event_service.stored = StoredConversation(
+                id=uuid4(),
+                **request.model_dump(mode="json", context={"expose_secrets": True}),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+            mock_event_service.get_state.return_value = ConversationState(
+                id=mock_event_service.stored.id,
+                agent=request.agent,
+                workspace=request.workspace,
+                execution_status=ConversationExecutionStatus.IDLE,
+                confirmation_policy=request.confirmation_policy,
+            )
+
+            with patch.object(
+                conversation_service,
+                "_start_event_service",
+                return_value=mock_event_service,
+            ):
+                await conversation_service.start_conversation(request)
+
+            message, run, sender = mock_event_service.send_message.await_args.args
+            assert message == initial_message.create_message()
+            assert run is True
+            assert sender == "frontend-user"
 
     @pytest.mark.asyncio
     async def test_start_conversation_with_secrets(self, conversation_service):

@@ -98,6 +98,7 @@ class TestSendMessageEndpoint:
             request_data = {
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello, world!"}],
+                "sender": "frontend-user",
                 "run": True,
             }
 
@@ -111,7 +112,7 @@ class TestSendMessageEndpoint:
             # Verify send_message was called with correct parameters
             mock_event_service.send_message.assert_called_once()
             call_args = mock_event_service.send_message.call_args
-            message, run_flag = call_args[0]
+            message, run_flag, sender = call_args[0]
 
             assert isinstance(message, Message)
             assert message.role == "user"
@@ -119,6 +120,7 @@ class TestSendMessageEndpoint:
             assert isinstance(message.content[0], TextContent)
             assert message.content[0].text == "Hello, world!"
             assert run_flag is True
+            assert sender == "frontend-user"
         finally:
             # Clean up the dependency override
             client.app.dependency_overrides.clear()

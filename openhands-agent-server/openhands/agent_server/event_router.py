@@ -210,7 +210,10 @@ async def send_message(
 ) -> Success:
     """Send a message to a conversation"""
     message = Message(role=request.role, content=request.content)
-    await event_service.send_message(message, request.run)
+    if request.sender is None:
+        await event_service.send_message(message, request.run)
+    else:
+        await event_service.send_message(message, request.run, request.sender)
     return Success()
 
 

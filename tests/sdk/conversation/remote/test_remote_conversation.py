@@ -668,6 +668,25 @@ class TestRemoteConversation:
     @patch(
         "openhands.sdk.conversation.impl.remote_conversation.WebSocketCallbackClient"
     )
+    def test_remote_conversation_send_message_with_sender(self, mock_ws_client):
+        conversation_id = str(uuid.uuid4())
+        mock_client_instance = self.setup_mock_client(conversation_id=conversation_id)
+        mock_ws_client.return_value = Mock()
+
+        conversation = RemoteConversation(agent=self.agent, workspace=self.workspace)
+        conversation.send_message("Hello, world!", sender="frontend-user")
+
+        request_calls = [
+            call
+            for call in mock_client_instance.request.call_args_list
+            if call[0][0] == "POST"
+            and f"/api/conversations/{conversation_id}/events" in call[0][1]
+        ]
+        assert request_calls[-1].kwargs["json"]["sender"] == "frontend-user"
+
+    @patch(
+        "openhands.sdk.conversation.impl.remote_conversation.WebSocketCallbackClient"
+    )
     def test_remote_conversation_send_message_object(self, mock_ws_client):
         """Test sending a Message object."""
         # Setup mocks
