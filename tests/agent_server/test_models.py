@@ -1,12 +1,37 @@
 """Tests for agent_server models."""
 
+import json
 from typing import Any
 
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from openhands.agent_server.models import UpdateSecretsRequest
+from openhands.agent_server.models import ExecuteBashRequest, UpdateSecretsRequest
 from openhands.sdk.secret import LookupSecret, StaticSecret
+
+
+def test_execute_bash_request_environment_is_secret_and_validated():
+    secret_value = "model-secret-value"
+    request = ExecuteBashRequest.model_validate(
+        {"command": "true", "environment": {"VALID_NAME": secret_value}}
+    )
+
+    serialized = request.model_dump_json()
+    schema = ExecuteBashRequest.model_json_schema()
+
+    assert secret_value not in serialized
+    assert json.loads(serialized)["environment"] == {"VALID_NAME": "**********"}
+    value_schema = schema["properties"]["environment"]["anyOf"][0]["patternProperties"][
+        r"^[A-Za-z_][A-Za-z0-9_]*$"
+    ]
+    assert value_schema["format"] == "password"
+    assert value_schema["writeOnly"] is True
+
+    with pytest.raises(ValidationError) as exc_info:
+        ExecuteBashRequest.model_validate(
+            {"command": "true", "environment": {"INVALID-NAME": secret_value}}
+        )
+    assert secret_value not in str(exc_info.value)
 
 
 def test_update_secrets_request_string_conversion():

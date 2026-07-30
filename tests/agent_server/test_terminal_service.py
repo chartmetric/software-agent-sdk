@@ -1,6 +1,7 @@
 """Comprehensive tests for BashEventService bash command execution."""
 
 import asyncio
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -84,6 +85,59 @@ async def test_single_output_command(bash_service):
     retrieved_output = await bash_service.get_bash_event(output_event.id.hex)
     assert retrieved_output is not None
     assert retrieved_output.id == output_event.id
+
+
+@pytest.mark.asyncio
+async def test_command_environment_is_runtime_only(bash_service):
+    name = "OH_RUNTIME_ONLY_SECRET"
+    secret_value = "service-secret-value"
+    collector = EventCollector()
+    await bash_service.subscribe_to_events(collector)
+    request = ExecuteBashRequest.model_validate(
+        {
+            "command": f'test -n "${name}" && printf received',
+            "environment": {name: secret_value},
+        }
+    )
+
+    command, task = await bash_service.start_bash_command(request)
+    await task
+
+    assert os.environ.get(name) is None
+    assert collector.outputs[-1].stdout == "received"
+    assert not hasattr(command, "environment")
+    assert secret_value not in command.model_dump_json()
+    assert all(
+        secret_value not in path.read_text()
+        for path in bash_service.bash_events_dir.iterdir()
+    )
+    page = await bash_service.search_bash_events()
+    assert secret_value not in page.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_command_environment_is_not_exposed_on_process_error(
+    bash_service, monkeypatch, caplog
+):
+    secret_value = "process-error-secret-value"
+
+    async def fail_to_start(*args, **kwargs):
+        raise ValueError(secret_value)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", fail_to_start)
+    request = ExecuteBashRequest.model_validate(
+        {"command": "true", "environment": {"API_TOKEN": secret_value}}
+    )
+
+    command, task = await bash_service.start_bash_command(request)
+    await task
+
+    page = await bash_service.search_bash_events(command_id__eq=command.id)
+    output = page.items[-1]
+    assert isinstance(output, BashOutput)
+    assert output.stderr == "Error executing command"
+    assert secret_value not in caplog.text
+    assert secret_value not in page.model_dump_json()
 
 
 @pytest.mark.asyncio

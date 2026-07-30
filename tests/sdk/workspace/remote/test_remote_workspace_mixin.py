@@ -128,6 +128,50 @@ def test_execute_command_generator_without_cwd():
     # First yield - start command
     start_kwargs = next(generator)
     assert "cwd" not in start_kwargs["json"]
+    assert "environment" not in start_kwargs["json"]
+
+
+def test_execute_command_generator_sends_environment_separately():
+    mixin = RemoteWorkspaceMixinHelper(
+        host="http://localhost:8000", working_dir="workspace"
+    )
+    secret_value = "remote-secret-value"
+
+    generator = mixin._execute_command_generator(
+        "echo hello", None, 30.0, {"API_TOKEN": secret_value}
+    )
+    start_kwargs = next(generator)
+
+    assert start_kwargs["json"] == {
+        "command": "echo hello",
+        "timeout": 30,
+        "environment": {"API_TOKEN": secret_value},
+    }
+    assert secret_value not in start_kwargs["json"]["command"]
+
+
+def test_execute_command_generator_hides_environment_from_errors(caplog):
+    mixin = RemoteWorkspaceMixinHelper(
+        host="http://localhost:8000", working_dir="workspace"
+    )
+    secret_value = "remote-error-secret-value"
+    response = Mock()
+    response.raise_for_status.side_effect = ValueError(secret_value)
+    generator = mixin._execute_command_generator(
+        "echo hello", None, 30.0, {"API_TOKEN": secret_value}
+    )
+    next(generator)
+
+    try:
+        generator.send(response)
+        assert False, "Generator should have stopped"
+    except StopIteration as exc_info:
+        result = exc_info.value
+
+    assert result.stderr == "Remote execution error"
+    assert result.command == "echo hello"
+    assert secret_value not in caplog.text
+    assert secret_value not in result.model_dump_json()
 
 
 def test_execute_command_generator_with_path_cwd():

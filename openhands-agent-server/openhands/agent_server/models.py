@@ -3,10 +3,15 @@ from __future__ import annotations
 from abc import ABC
 from datetime import datetime
 from enum import Enum, StrEnum
-from typing import Any, TypeAlias
+from typing import Annotated, Any, TypeAlias
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    field_validator,
+)
 
 from openhands.sdk.agent.acp_models import ACPModelInfo
 from openhands.sdk.agent.base import AgentBase
@@ -585,7 +590,7 @@ class BashEventBase(DiscriminatedUnionMixin, ABC):
     timestamp: datetime = Field(default_factory=utc_now)
 
 
-class ExecuteBashRequest(BaseModel):
+class _BashCommandData(BaseModel):
     command: str = Field(description="The bash command to execute")
     cwd: str | None = Field(default=None, description="The current working directory")
     timeout: int = Field(
@@ -594,7 +599,17 @@ class ExecuteBashRequest(BaseModel):
     )
 
 
-class BashCommand(BashEventBase, ExecuteBashRequest):
+_EnvironmentVariableName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
+
+
+class ExecuteBashRequest(_BashCommandData):
+    environment: dict[_EnvironmentVariableName, SecretStr] | None = Field(
+        default=None,
+        description="Environment variables for this command. Values are secrets.",
+    )
+
+
+class BashCommand(BashEventBase, _BashCommandData):
     pass
 
 

@@ -1,6 +1,6 @@
 import logging
 import time
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -69,6 +69,7 @@ class RemoteWorkspaceMixin(BaseModel):
         command: str,
         cwd: str | Path | None,
         timeout: float,
+        environment: Mapping[str, str] | None = None,
     ) -> Generator[dict[str, Any], httpx.Response, CommandResult]:
         """Execute a bash command on the remote system.
 
@@ -92,6 +93,8 @@ class RemoteWorkspaceMixin(BaseModel):
         }
         if cwd is not None:
             payload["cwd"] = _remote_path(cwd)
+        if environment is not None:
+            payload["environment"] = dict(environment)
 
         try:
             # Start the command
@@ -198,11 +201,16 @@ class RemoteWorkspaceMixin(BaseModel):
                 "Remote command execution failed (error_type=%s)",
                 type(e).__name__,
             )
+            error = (
+                f"Remote execution error: {e}"
+                if environment is None
+                else "Remote execution error"
+            )
             return CommandResult(
                 command=command,
                 exit_code=-1,
                 stdout="",
-                stderr=f"Remote execution error: {str(e)}",
+                stderr=error,
                 timeout_occurred=False,
             )
 

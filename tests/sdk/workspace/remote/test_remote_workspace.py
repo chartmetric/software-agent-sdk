@@ -131,6 +131,28 @@ def test_execute_command(mock_execute):
 
 
 @patch("openhands.sdk.workspace.remote.base.RemoteWorkspace._execute")
+def test_execute_command_forwards_environment(mock_execute):
+    workspace = RemoteWorkspace(host="http://localhost:8000", working_dir="workspace")
+    expected_result = CommandResult(
+        command="echo hello",
+        exit_code=0,
+        stdout="hello\n",
+        stderr="",
+        timeout_occurred=False,
+    )
+    mock_execute.return_value = expected_result
+
+    result = workspace.execute_command(
+        "echo hello", environment={"API_TOKEN": "sync-secret-value"}
+    )
+    request = next(mock_execute.call_args.args[0])
+
+    assert result == expected_result
+    assert request["json"]["environment"] == {"API_TOKEN": "sync-secret-value"}
+    assert result.command == "echo hello"
+
+
+@patch("openhands.sdk.workspace.remote.base.RemoteWorkspace._execute")
 def test_file_upload(mock_execute):
     """Test file_upload method calls _execute with correct generator."""
     workspace = RemoteWorkspace(host="http://localhost:8000", working_dir="/tmp")

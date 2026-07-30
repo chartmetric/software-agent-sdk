@@ -1,5 +1,5 @@
 import os
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -135,6 +135,7 @@ class RemoteWorkspace(RemoteWorkspaceMixin, BaseWorkspace):
         command: str,
         cwd: str | Path | None = None,
         timeout: float = 30.0,
+        environment: Mapping[str, str] | None = None,
     ) -> CommandResult:
         """Execute a bash command on the remote system.
 
@@ -145,11 +146,12 @@ class RemoteWorkspace(RemoteWorkspaceMixin, BaseWorkspace):
             command: The bash command to execute
             cwd: Working directory (optional)
             timeout: Timeout in seconds
+            environment: Environment variables whose values are treated as secrets
 
         Returns:
             CommandResult: Result with stdout, stderr, exit_code, and other metadata
         """
-        generator = self._execute_command_generator(command, cwd, timeout)
+        generator = self._execute_command_generator(command, cwd, timeout, environment)
         result = self._execute(generator)
         return result
 

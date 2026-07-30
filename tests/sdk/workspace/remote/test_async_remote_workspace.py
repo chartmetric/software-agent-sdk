@@ -135,6 +135,33 @@ async def test_async_execute_command(mock_execute):
 @patch(
     "openhands.sdk.workspace.remote.async_remote_workspace.AsyncRemoteWorkspace._execute"
 )
+async def test_async_execute_command_forwards_environment(mock_execute):
+    workspace = AsyncRemoteWorkspace(
+        host="http://localhost:8000", working_dir="workspace"
+    )
+    expected_result = CommandResult(
+        command="echo hello",
+        exit_code=0,
+        stdout="hello\n",
+        stderr="",
+        timeout_occurred=False,
+    )
+    mock_execute.return_value = expected_result
+
+    result = await workspace.execute_command(
+        "echo hello", environment={"API_TOKEN": "async-secret-value"}
+    )
+    request = next(mock_execute.call_args.args[0])
+
+    assert result == expected_result
+    assert request["json"]["environment"] == {"API_TOKEN": "async-secret-value"}
+    assert result.command == "echo hello"
+
+
+@pytest.mark.asyncio
+@patch(
+    "openhands.sdk.workspace.remote.async_remote_workspace.AsyncRemoteWorkspace._execute"
+)
 async def test_async_file_upload(mock_execute):
     """Test file_upload method calls _execute with correct generator."""
     workspace = AsyncRemoteWorkspace(

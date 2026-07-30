@@ -203,18 +203,37 @@ class BashEventService:
         self, request: ExecuteBashRequest
     ) -> tuple[BashCommand, asyncio.Task]:
         """Execute a bash command. The output will be published separately."""
-        command = BashCommand(**request.model_dump())
+        command = BashCommand(
+            command=request.command,
+            cwd=request.cwd,
+            timeout=request.timeout,
+        )
         self._save_event_to_file(command)
         await self._pub_sub(command)
 
-        # Execute the bash command in a background task
-        task = asyncio.create_task(self._execute_bash_command(command))
+        environment = (
+            {
+                name: secret.get_secret_value()
+                for name, secret in request.environment.items()
+            }
+            if request.environment is not None
+            else None
+        )
+        task = asyncio.create_task(self._execute_bash_command(command, environment))
 
         return command, task
 
-    async def _execute_bash_command(self, command: BashCommand) -> None:
+    async def _execute_bash_command(
+        self,
+        command: BashCommand,
+        environment: dict[str, str] | None = None,
+    ) -> None:
         """Execute the bash event and create an observation event."""
         try:
+            process_env = sanitized_env()
+            if environment is not None:
+                process_env.update(environment)
+
             # Create subprocess in a new session so we can signal the whole
             # process group on teardown (the shell's children, e.g. sleep, must
             # die before the shell can run user-installed traps).
@@ -224,7 +243,7 @@ class BashEventService:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 shell=True,
-                env=sanitized_env(),
+                env=process_env,
                 start_new_session=True,
             )
 
@@ -345,7 +364,7 @@ class BashEventService:
                 command_id=command.id,
                 order=0,
                 exit_code=-1,
-                stderr=f"Error executing command: {str(e)}",
+                stderr="Error executing command",
             )
 
             self._save_event_to_file(error_output)
