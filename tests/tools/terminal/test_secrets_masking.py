@@ -137,3 +137,50 @@ def test_terminal_executor_masks_unregistered_environment_secrets():
         finally:
             executor.close()
             conversation.close()
+
+
+def test_terminal_executor_masks_secret_not_referenced_by_command():
+    """Secrets are masked even when the command never references their name."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        llm = LLM(
+            model="gpt-4o-mini", api_key=SecretStr("test-key"), usage_id="test-llm"
+        )
+        agent = Agent(llm=llm, tools=[])
+
+        token = "github_pat_REALSECRETVALUE123"
+        conversation = Conversation(
+            agent=agent,
+            workspace=temp_dir,
+            persistence_dir=temp_dir,
+            secrets={"GITHUB_TOKEN": token},
+        )
+
+        executor = TerminalExecutor(working_dir=temp_dir, terminal_type="subprocess")
+
+        try:
+            command = "git remote -v"
+            mock_session = Mock()
+            mock_session.execute.return_value = TerminalObservation(
+                command=command,
+                exit_code=0,
+                content=[
+                    TextContent(
+                        text=f"origin\thttps://{token}@github.com/repo/test.git (fetch)"
+                    )
+                ],
+            )
+            mock_session._closed = False
+            executor._session = mock_session
+
+            result = executor(
+                TerminalAction(command=command), conversation=conversation
+            )
+
+            assert token not in result.text
+            assert result.text == (
+                "origin\thttps://****@github.com/repo/test.git (fetch)"
+            )
+
+        finally:
+            executor.close()
+            conversation.close()
