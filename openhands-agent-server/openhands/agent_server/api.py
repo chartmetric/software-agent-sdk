@@ -57,6 +57,8 @@ from openhands.agent_server.openai.router import (
 )
 from openhands.agent_server.plugins_router import plugins_router
 from openhands.agent_server.profiles_router import profiles_router
+from openhands.agent_server.served_app_router import served_app_router
+from openhands.agent_server.served_app_service import get_served_app_service
 from openhands.agent_server.server_details_router import (
     get_server_info,
     mark_initialization_complete,
@@ -165,6 +167,7 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
         vscode_service = get_vscode_service()
         desktop_service = get_desktop_service()
         tool_preload_service = get_tool_preload_service()
+        served_app_service = get_served_app_service()
 
         # Define async functions for starting each service
         async def start_vscode_service():
@@ -201,11 +204,16 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
             else:
                 logger.info("Tool preload service is disabled")
 
+        async def start_served_app_service():
+            await served_app_service.start()
+            logger.info("Served app discovery started")
+
         # Start all services concurrently
         results = await asyncio.gather(
             start_vscode_service(),
             start_desktop_service(),
             start_tool_preload_service(),
+            start_served_app_service(),
             return_exceptions=True,
         )
 
@@ -235,10 +243,14 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
                 if tool_preload_service is not None:
                     await tool_preload_service.stop()
 
+            async def stop_served_app_service():
+                await served_app_service.stop()
+
             await asyncio.gather(
                 stop_vscode_service(),
                 stop_desktop_service(),
                 stop_tool_preload_service(),
+                stop_served_app_service(),
                 return_exceptions=True,
             )
 
@@ -445,6 +457,7 @@ def _add_api_routes(app: FastAPI) -> None:
     api_router.include_router(workspaces_router)
     api_router.include_router(profiles_router)
     api_router.include_router(agent_profiles_router)
+    api_router.include_router(served_app_router)
     # /api/auth/* mints workspace cookies and requires the header to bootstrap,
     # so it lives under the header-only auth group.
     api_router.include_router(auth_router)

@@ -273,6 +273,14 @@ def patched_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(LLM, "acompletion", fake_acompletion, raising=True)
 
 
+def test_served_apps_endpoint(server_env: dict) -> None:
+    with httpx.Client(base_url=server_env["host"]) as client:
+        response = client.get("/api/served-apps")
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
 def test_remote_conversation_websocket_first_message_auth(
     authenticated_server_env,
     monkeypatch: pytest.MonkeyPatch,
