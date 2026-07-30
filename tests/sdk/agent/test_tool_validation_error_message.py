@@ -287,6 +287,40 @@ def test_tool_call_without_security_risk_succeeds():
     assert action_events[0].security_risk == SecurityRisk.UNKNOWN
 
 
+def test_tool_call_with_security_risk_succeeds():
+    llm = LLM(
+        usage_id="test-llm",
+        model="test-model",
+        api_key=SecretStr("test-key"),
+        base_url="http://test",
+    )
+    agent = Agent(llm=llm, tools=[Tool(name="ValidationTestTool")])
+
+    collected_events = []
+    conversation = Conversation(agent=agent, callbacks=[collected_events.append])
+    conversation.set_security_analyzer(LLMSecurityAnalyzer())
+
+    with patch(
+        "openhands.sdk.llm.llm.litellm_completion",
+        side_effect=_mock_llm_response_factory(
+            '{"command": "view", "path": "/test", "security_risk": "LOW"}'
+        ),
+    ):
+        conversation.send_message(
+            Message(role="user", content=[TextContent(text="Do something")])
+        )
+        agent.step(conversation, on_event=collected_events.append)
+
+    error_events = [e for e in collected_events if isinstance(e, AgentErrorEvent)]
+    assert error_events == []
+
+    action_events = [e for e in collected_events if isinstance(e, ActionEvent)]
+    assert len(action_events) == 1
+    assert action_events[0].security_risk == SecurityRisk.LOW
+    assert isinstance(action_events[0].action, ValidationTestAction)
+    assert action_events[0].action.command == "view"
+
+
 def test_omitted_security_risk_still_requires_confirmation():
     """With LLMSecurityAnalyzer + ConfirmRisky, UNKNOWN risk must not auto-proceed."""
     llm = LLM(

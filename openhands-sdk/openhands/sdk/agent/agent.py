@@ -1274,16 +1274,16 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
 
             arguments = fix_malformed_tool_arguments(arguments, tool.action_type)
             summary = self._extract_summary(tool.name, arguments, tool=tool)
+            security_risk = self._extract_security_risk(
+                arguments,
+                tool.annotations.readOnlyHint if tool.annotations else False,
+                security_analyzer,
+            )
             runtime_action: Action = tool.action_from_arguments(arguments)
             safe_arguments = conversation.state.secret_registry.mask_secrets_in_data(
                 arguments
             )
             assert isinstance(safe_arguments, dict)
-            security_risk = self._extract_security_risk(
-                safe_arguments,
-                tool.annotations.readOnlyHint if tool.annotations else False,
-                security_analyzer,
-            )
             assert "security_risk" not in arguments, (
                 "Unexpected 'security_risk' key found in tool arguments"
             )
