@@ -120,6 +120,15 @@ a = Analysis(
         *collect_data_files("fakeredis"),  # Required for commands.json used by fakeredis ACL
         *get_fakeredis_data(),  # Ensure fakeredis/model/ directory structure exists
 
+        # binaryornot >=0.6.0 reads binary_formats.csv out of the binaryornot.data
+        # subpackage via importlib.resources, and does it at *module import* time
+        # (helpers._load_binary_signatures runs on import). openhands.tools imports
+        # file_editor unconditionally, so without this the frozen agent-server dies
+        # during startup with "No module named 'binaryornot.data'" before serving a
+        # single request. Pre-0.6.0 releases had no data subpackage, which is why
+        # older builds of this spec happened to work.
+        *collect_data_files("binaryornot"),
+
         # OpenHands SDK prompt templates (adjusted for shallow namespace layout)
         *collect_data_files("openhands.sdk.agent", includes=["prompts/*.j2"]),
         *collect_data_files("openhands.sdk.context.condenser", includes=["prompts/*.j2"]),
@@ -162,6 +171,9 @@ a = Analysis(
         *collect_submodules("fastmcp"),
         *collect_submodules("fakeredis"),
         *collect_submodules("lupa"),  # Required for fakeredis[lua] Lua scripting support
+        # binaryornot.data is reached through importlib.resources, so static
+        # analysis never sees the import. See the datas entry above.
+        *collect_submodules("binaryornot"),
         # rich._unicode_data.unicodeX_Y_Z is imported dynamically based on
         # unicodedata.unidata_version (e.g. unicode17_0_0 on Python 3.13).
         *collect_submodules("rich"),
