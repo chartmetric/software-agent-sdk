@@ -1354,6 +1354,20 @@ class EventService:
                 events = list(conversation._state.events)
             return controller.on_run_finished(events)
 
+        # TODO(goal-loop sender): stamp these injections with a sender (e.g.
+        # "goal-loop") instead of leaving them shaped exactly like human input.
+        # `send_message` already knows they are machinery (`_from_goal_loop=True`
+        # at both call sites below) and `MessageEvent.sender` exists for this —
+        # the LSM loop in the app server already marks its own injections with
+        # "loop-policy" / "internal-agent-feedback" and clients filter on that.
+        # Because the goal loop stamps nothing, the frontend has to identify these
+        # events by matching the prompt *text* (FOLLOWUP_PROMPT / RESUME_PROMPT
+        # prefixes, see `src/utils/goal-loop-reprompt.ts` in the app repo). If it
+        # misses, the re-prompts render as fake user turns and clear the user's
+        # in-flight "Sending…" bubble, so their message vanishes from the chat.
+        # Reword the prompts and that match breaks silently; the app repo has a
+        # tripwire (`tests/unit/test_goal_reprompt_prefixes.py`) that fails when
+        # this happens. Threading a sender through here retires both.
         def _user(text: str) -> Message:
             return Message(role="user", content=[TextContent(text=text)])
 
