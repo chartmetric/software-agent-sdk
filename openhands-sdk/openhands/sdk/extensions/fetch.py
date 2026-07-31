@@ -212,6 +212,14 @@ def get_cache_path(source: str, cache_dir: Path) -> Path:
 
     Creates a deterministic path based on a hash of the source URL.
 
+    Credentials are masked out before hashing. Callers hand us URLs with the
+    token inline (``https://oauth2:<token>@host/owner/repo.git``), and a token is
+    not part of the extension's identity: hashing it made the cache directory
+    change whenever the token did. Short-lived credentials — a GitHub App
+    installation token lasts an hour — therefore missed the cache on every
+    rotation, re-cloning the same repository and leaving the previous directory
+    behind for good.
+
     Args:
         source: The extension source (URL or path).
         cache_dir: Base cache directory.
@@ -220,7 +228,9 @@ def get_cache_path(source: str, cache_dir: Path) -> Path:
         Path where the extension should be cached.
     """
     # Create a hash of the source for the directory name
-    source_hash = hashlib.sha256(source.encode()).hexdigest()[:16]
+    source_hash = hashlib.sha256(redact_url_credentials(source).encode()).hexdigest()[
+        :16
+    ]
 
     # Extract repo name for human-readable cache directory name
     readable_name = extract_repo_name(source)

@@ -171,6 +171,38 @@ def test_cache_path_includes_readable_name(tmp_path: Path):
     assert "my-extension" in path.name
 
 
+def test_cache_path_survives_credential_rotation(tmp_path: Path):
+    """A rotated token must not move the cache.
+
+    Callers pass URLs with the token inline. A GitHub App installation token
+    lasts an hour, so hashing it meant every rotation missed the cache, recloned
+    the same repository, and orphaned the previous directory.
+    """
+    first = get_cache_path(
+        "https://oauth2:token-issued-at-noon@github.com/owner/repo.git", tmp_path
+    )
+    second = get_cache_path(
+        "https://oauth2:token-issued-at-one@github.com/owner/repo.git", tmp_path
+    )
+    assert first == second
+
+
+def test_cache_path_still_separates_different_repositories_with_credentials(
+    tmp_path: Path,
+):
+    """Masking the credential must not collapse distinct repositories."""
+    path1 = get_cache_path("https://oauth2:t@github.com/owner/repo1.git", tmp_path)
+    path2 = get_cache_path("https://oauth2:t@github.com/owner/repo2.git", tmp_path)
+    assert path1 != path2
+
+
+def test_cache_path_does_not_leak_credentials_into_the_directory_name(tmp_path: Path):
+    path = get_cache_path(
+        "https://oauth2:super-secret-token@github.com/owner/repo.git", tmp_path
+    )
+    assert "super-secret-token" not in str(path)
+
+
 # -- fetch (local sources) ----------------------------------------------------
 
 
