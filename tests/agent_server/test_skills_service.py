@@ -541,6 +541,7 @@ class TestLoadAllSkills:
             source="github:example/marketplaces",
             ref="feature-branch",
             repo_path="catalogs/public",
+            update=True,
         )
 
     def test_load_all_skills_returns_skill_load_result(self):

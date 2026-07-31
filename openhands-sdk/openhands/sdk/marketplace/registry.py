@@ -79,9 +79,26 @@ class MarketplaceNotFoundError(PluginResolutionError):
 class MarketplaceRegistry:
     """Resolve plugin references against registered marketplaces."""
 
-    def __init__(self, registrations: list[MarketplaceRegistration] | None = None):
+    def __init__(
+        self,
+        registrations: list[MarketplaceRegistration] | None = None,
+        *,
+        update: bool = True,
+    ):
+        """
+        Args:
+            registrations: Marketplaces to resolve plugin references against.
+            update: Whether a marketplace already present in the on-disk cache is
+                refreshed from its remote. Defaults to True, which costs a network
+                round trip per marketplace on every fetch. Pass False where the
+                cache is populated out of band — a prebuilt image or a warmed
+                sandbox — and the caller would rather not pay that round trip on a
+                latency-sensitive path such as conversation start. A marketplace
+                missing from the cache is still cloned either way.
+        """
         self._registrations: dict[str, MarketplaceRegistration] = {}
         self._cache: dict[str, FetchedMarketplace] = {}
+        self._update = update
         for registration in registrations or []:
             if registration.name in self._registrations:
                 raise ValueError(
@@ -163,6 +180,7 @@ class MarketplaceRegistry:
             source=registration.source,
             ref=registration.ref,
             repo_path=registration.repo_path,
+            update=self._update,
         )
         fetched = FetchedMarketplace(
             marketplace=Marketplace.load(path),

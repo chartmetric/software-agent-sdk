@@ -193,6 +193,36 @@ def test_get_marketplace_with_resolution_preserves_resolved_ref(tmp_path: Path) 
         source="github:example/marketplaces",
         ref="main",
         repo_path="catalogs/team",
+        update=True,
+    )
+
+
+def test_update_false_skips_refreshing_a_cached_marketplace(tmp_path: Path) -> None:
+    """``update=False`` reaches the fetch, so a cached marketplace costs no network.
+
+    Skill loading blocks conversation start, so a caller whose cache is populated
+    out of band needs a way to keep that round trip off the path.
+    """
+    marketplace_dir = _create_marketplace(
+        tmp_path / "marketplace",
+        plugins=[{"name": "formatter", "source": "./plugins/formatter"}],
+    )
+    registry = MarketplaceRegistry(
+        [MarketplaceRegistration(name="team", source="github:example/marketplaces")],
+        update=False,
+    )
+
+    with patch(
+        "openhands.sdk.marketplace.registry.fetch_plugin_with_resolution",
+        return_value=(marketplace_dir, "abc123"),
+    ) as mock_fetch:
+        registry.get_marketplace("team")
+
+    mock_fetch.assert_called_once_with(
+        source="github:example/marketplaces",
+        ref=None,
+        repo_path=None,
+        update=False,
     )
 
 

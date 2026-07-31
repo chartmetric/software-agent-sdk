@@ -296,12 +296,19 @@ def merge_skills(skill_lists: list[list[Skill]]) -> list[Skill]:
 
 def load_registered_marketplace_skills(
     registered_marketplaces: list[MarketplaceRegistration],
+    update: bool = True,
 ) -> list[Skill]:
-    """Load skills from auto-load plugins and standalone skills in marketplaces."""
+    """Load skills from auto-load plugins and standalone skills in marketplaces.
+
+    Args:
+        registered_marketplaces: Marketplaces to load from.
+        update: Whether a cached marketplace is refreshed from its remote. See
+            ``AgentServerConfig.update_marketplaces_on_load``.
+    """
     if not registered_marketplaces:
         return []
 
-    registry = MarketplaceRegistry(registered_marketplaces)
+    registry = MarketplaceRegistry(registered_marketplaces, update=update)
     all_skills: list[Skill] = []
     for registration in registry.get_auto_load_registrations():
         try:
@@ -354,6 +361,7 @@ def load_all_skills(
     sandbox_exposed_urls: list[ExposedUrlData] | None = None,
     marketplace_path: str | None = DEFAULT_MARKETPLACE_PATH,
     registered_marketplaces: list[MarketplaceRegistration] | None = None,
+    update_marketplaces: bool = True,
 ) -> SkillLoadResult:
     """Merge skills: sandbox < marketplace < public < user < org < project."""
     sources: dict[str, int] = {}
@@ -376,7 +384,9 @@ def load_all_skills(
 
     marketplace_skills: list[Skill] = []
     if load_public and auto_load_registrations:
-        marketplace_skills = load_registered_marketplace_skills(auto_load_registrations)
+        marketplace_skills = load_registered_marketplace_skills(
+            auto_load_registrations, update=update_marketplaces
+        )
     sources["registered_marketplaces"] = len(marketplace_skills)
     skill_lists.append(marketplace_skills)
 

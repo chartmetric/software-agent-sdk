@@ -326,6 +326,18 @@ class Config(BaseModel):
             "Can be configured with OH_REGISTERED_MARKETPLACES as a JSON list."
         ),
     )
+    update_marketplaces_on_load: bool = Field(
+        default=True,
+        description=(
+            "Whether a marketplace already in the on-disk cache is refreshed from "
+            "its remote when skills are loaded. Skill loading blocks conversation "
+            "start, so each refresh puts a network round trip on that path. Set "
+            "false where the cache is populated out of band -- baked into the "
+            "image or warmed before the sandbox is handed out -- to trade "
+            "freshness for start latency. Marketplaces absent from the cache are "
+            "cloned regardless."
+        ),
+    )
     deferred_init: bool = Field(
         default=False,
         description=(

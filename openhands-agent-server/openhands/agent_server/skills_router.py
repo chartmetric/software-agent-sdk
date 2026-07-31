@@ -314,6 +314,9 @@ def get_skills(request: SkillsRequest, http_request: Request) -> SkillsResponse:
         sandbox_exposed_urls=sandbox_urls,
         marketplace_path=request.marketplace_path,
         registered_marketplaces=registered_marketplaces,
+        update_marketplaces=(
+            config.update_marketplaces_on_load if config is not None else True
+        ),
     )
 
     skills_info = [skill.to_skill_info() for skill in result.skills]
