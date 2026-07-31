@@ -1,6 +1,7 @@
 """Fetching utilities for extensions."""
 
 import hashlib
+import re
 from enum import StrEnum
 from pathlib import Path
 
@@ -207,18 +208,33 @@ def fetch_with_resolution(
     return ext_path, resolved_ref
 
 
+def _strip_url_credentials(source: str) -> str:
+    """Drop a ``user:password@`` prefix from an HTTP(S) URL.
+
+    Unlike :func:`redact_url_credentials`, which substitutes ``****`` so a URL
+    stays readable in logs, this removes the userinfo outright: a masked URL still
+    hashes differently from the same URL fetched anonymously, which is the
+    difference between a shared cache entry and two.
+    """
+    return re.sub(r"^(https?://)[^/@]+@", r"\g<1>", source)
+
+
 def get_cache_path(source: str, cache_dir: Path) -> Path:
     """Get the cache path for an extension source.
 
     Creates a deterministic path based on a hash of the source URL.
 
-    Credentials are masked out before hashing. Callers hand us URLs with the
-    token inline (``https://oauth2:<token>@host/owner/repo.git``), and a token is
-    not part of the extension's identity: hashing it made the cache directory
-    change whenever the token did. Short-lived credentials — a GitHub App
-    installation token lasts an hour — therefore missed the cache on every
-    rotation, re-cloning the same repository and leaving the previous directory
-    behind for good.
+    Credentials are stripped before hashing, so an extension's identity is the
+    repository it names and nothing else.
+
+    Two reasons. Callers hand us URLs with the token inline
+    (``https://oauth2:<token>@host/owner/repo.git``), so hashing the URL as given
+    tied the cache directory to the credential: a GitHub App installation token
+    lasts an hour, so every rotation missed the cache, recloned the same
+    repository, and orphaned the previous directory. And whoever *populates* the
+    cache may authenticate differently from whoever reads it — a warm cache built
+    with a credential helper, read by a fetch handed an inline token — which only
+    lines up if the credential leaves no trace in the key at all.
 
     Args:
         source: The extension source (URL or path).
@@ -228,7 +244,7 @@ def get_cache_path(source: str, cache_dir: Path) -> Path:
         Path where the extension should be cached.
     """
     # Create a hash of the source for the directory name
-    source_hash = hashlib.sha256(redact_url_credentials(source).encode()).hexdigest()[
+    source_hash = hashlib.sha256(_strip_url_credentials(source).encode()).hexdigest()[
         :16
     ]
 

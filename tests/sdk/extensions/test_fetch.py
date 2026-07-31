@@ -171,6 +171,20 @@ def test_cache_path_includes_readable_name(tmp_path: Path):
     assert "my-extension" in path.name
 
 
+def test_cache_path_ignores_credentials_entirely(tmp_path: Path):
+    """An authenticated URL and an anonymous one share a cache entry.
+
+    Whoever populates the cache may authenticate differently from whoever reads
+    it -- a warm cache built with a credential helper, read by a fetch handed an
+    inline token -- and those only line up if the credential leaves no trace.
+    """
+    anonymous = get_cache_path("https://github.com/owner/repo.git", tmp_path)
+    authenticated = get_cache_path(
+        "https://oauth2:token@github.com/owner/repo.git", tmp_path
+    )
+    assert anonymous == authenticated
+
+
 def test_cache_path_survives_credential_rotation(tmp_path: Path):
     """A rotated token must not move the cache.
 
