@@ -5,6 +5,7 @@ import re
 from enum import StrEnum
 from pathlib import Path
 
+from openhands.sdk.extensions.cache_seed import seed_cache_from_object_storage
 from openhands.sdk.git.cached_repo import GitHelper, try_cached_clone_or_update
 from openhands.sdk.git.utils import extract_repo_name, is_git_url, normalize_git_url
 from openhands.sdk.logger import get_logger
@@ -283,6 +284,10 @@ def _fetch_remote_source_with_resolution(
     """
     repo_cache_path = get_cache_path(url, cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # A published tarball, where one exists, saves the clone below from starting
+    # from nothing. No-op unless the deployment configures object storage.
+    seed_cache_from_object_storage(repo_cache_path)
 
     result = try_cached_clone_or_update(
         url=url,
