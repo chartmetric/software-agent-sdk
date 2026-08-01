@@ -43,6 +43,16 @@ def test_server_workflow_publishes_python_image_to_project_ecr_with_oidc() -> No
     assert "secrets.GHCR_PAT" not in workflow_text
 
 
+def test_server_workflow_python_images_use_node_24() -> None:
+    """Published Python images should support repositories requiring Node 24."""
+    workflow_text = SERVER_WORKFLOW.read_text(encoding="utf-8")
+    node_24_image = "nikolaik/python-nodejs:python3.13-nodejs24-slim"
+    node_22_image = "nikolaik/python-nodejs:python3.13-nodejs22-slim"
+
+    assert workflow_text.count(f"base_image: {node_24_image}") >= 2
+    assert f"base_image: {node_22_image}" not in workflow_text
+
+
 def test_agent_server_binary_copies_openhands_distribution_metadata() -> None:
     """The frozen binary should preserve OpenHands package metadata."""
     spec_text = AGENT_SERVER_SPEC.read_text(encoding="utf-8")
