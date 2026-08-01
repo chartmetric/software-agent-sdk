@@ -579,6 +579,84 @@ jobs:
                   path: manifest-info/${{ matrix.variant }}.json
                   retention-days: 1
 
+    publish-python-image-to-ecr:
+        name: Publish Python image to cm-pilot ECR
+        needs: merge-manifests
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-24.04
+        permissions:
+            contents: read
+            id-token: write
+            packages: read
+        env:
+            AWS_REGION: us-east-1
+            ECR_IMAGE: 897744604563.dkr.ecr.us-east-1.amazonaws.com/cm-pilot-agent-server
+            ECR_REPOSITORY: cm-pilot-agent-server
+            SDK_SHA: ${{ github.sha }}
+            SOURCE_IMAGE: ghcr.io/chartmetric/agent-server
+
+        steps:
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+              with:
+                  aws-region: ${{ env.AWS_REGION }}
+                  role-to-assume: arn:aws:iam::897744604563:role/cm-pilot-sdk-image-publisher
+                  role-session-name: cm-pilot-sdk-${{ github.run_id }}
+
+            - name: Log in to Amazon ECR
+              uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+
+            - name: Check immutable destination tag
+              id: destination
+              run: |
+                  if aws ecr describe-images \
+                      --repository-name "$ECR_REPOSITORY" \
+                      --image-ids "imageTag=${SDK_SHA}-python" \
+                      >/dev/null 2>&1; then
+                      echo "exists=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "exists=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Log in to GHCR
+              if: steps.destination.outputs.exists != 'true'
+              uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Install registry copy tool
+              if: steps.destination.outputs.exists != 'true'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install --yes skopeo
+
+            - name: Copy the Python multi-architecture image
+              if: steps.destination.outputs.exists != 'true'
+              run: |
+                  auth_file="$HOME/.docker/config.json"
+                  source_tag="${SDK_SHA:0:7}-python"
+                  destination_tag="${SDK_SHA}-python"
+                  skopeo copy --all \
+                      --src-authfile "$auth_file" \
+                      --dest-authfile "$auth_file" \
+                      "docker://${SOURCE_IMAGE}:${source_tag}" \
+                      "docker://${ECR_IMAGE}:${destination_tag}"
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+            - name: Verify the ECR image platforms
+              run: |
+                  image="${ECR_IMAGE}:${SDK_SHA}-python"
+                  manifest="$(docker buildx imagetools inspect --raw "$image")"
+                  printf '%s' "$manifest" | jq -e '
+                    [.manifests[].platform | "\(.os)/\(.architecture)"] as $platforms
+                    | ($platforms | index("linux/amd64")) != null
+                      and ($platforms | index("linux/arm64")) != null
+                  '
+
     consolidate-build-info:
         name: Consolidate Build Information
         needs: [build-and-push-image, merge-manifests]
