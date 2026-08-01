@@ -35,6 +35,8 @@ def test_server_workflow_publishes_python_image_to_project_ecr_with_oidc() -> No
     assert "aws-actions/configure-aws-credentials@" in workflow_text
     assert "aws-actions/amazon-ecr-login@" in workflow_text
     assert "skopeo copy --all" in workflow_text
+    assert "ecr_source_sha:" in workflow_text
+    assert "inputs.ecr_source_sha != ''" in workflow_text
     assert "${SDK_SHA:0:7}-python" in workflow_text
     assert "${SDK_SHA}-python" in workflow_text
     assert "aws ecr describe-images" in workflow_text
