@@ -22,6 +22,10 @@ on:
                 description: Target platforms
                 type: string
                 default: linux/amd64,linux/arm64
+            ecr_source_sha:
+                description: Existing GHCR commit SHA to copy to cm-pilot ECR
+                type: string
+                default: ''
 
 permissions:
     contents: read
@@ -582,7 +586,9 @@ jobs:
     publish-python-image-to-ecr:
         name: Publish Python image to cm-pilot ECR
         needs: merge-manifests
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >
+            (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+            (github.event_name == 'workflow_dispatch' && inputs.ecr_source_sha != '')
         runs-on: ubuntu-24.04
         permissions:
             contents: read
@@ -592,10 +598,17 @@ jobs:
             AWS_REGION: us-east-1
             ECR_IMAGE: 897744604563.dkr.ecr.us-east-1.amazonaws.com/cm-pilot-agent-server
             ECR_REPOSITORY: cm-pilot-agent-server
-            SDK_SHA: ${{ github.sha }}
+            SDK_SHA: ${{ inputs.ecr_source_sha != '' && inputs.ecr_source_sha || github.sha }}
             SOURCE_IMAGE: ghcr.io/chartmetric/agent-server
 
         steps:
+            - name: Validate source commit
+              run: |
+                  if [[ ! "$SDK_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                      echo "ecr_source_sha must be a full lowercase commit SHA" >&2
+                      exit 1
+                  fi
+
             - name: Configure AWS credentials
               uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
               with:
