@@ -2,9 +2,11 @@
 
 import asyncio
 import builtins
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -109,6 +111,22 @@ def test_browser_executor_initialization():
     assert executor._server is not None
     assert executor._async_executor is not None
     assert executor._action_timeout_seconds == DEFAULT_BROWSER_ACTION_TIMEOUT_SECONDS
+
+
+def test_browser_executor_uses_mask_safe_video_output_directory():
+    """Video paths must not inherit repository names that secret masking can redact."""
+    conversation_output_dir = "/workspace/chartmetric/chartmetric-pilot/.agent_tmp"
+    with patch.object(
+        BrowserToolExecutor,
+        "_ensure_chromium_available",
+        return_value="/usr/bin/chromium",
+    ):
+        executor = BrowserToolExecutor(full_output_save_dir=conversation_output_dir)
+
+    assert executor._video_recorder._output_root == str(
+        Path(tempfile.gettempdir()) / "ohva"
+    )
+    assert "chartmetric" not in executor._video_recorder._output_root
 
 
 def test_browser_executor_config_passing():

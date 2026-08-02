@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -102,6 +103,7 @@ MAX_CONSECUTIVE_FAILURES: Final[int] = 3
 # Shorter timeout used after a failure to avoid long cascading waits
 # against a dead browser.
 DEGRADED_TIMEOUT_SECONDS: Final[float] = 30.0
+MASK_SAFE_VIDEO_OUTPUT_ROOT: Final[str] = str(Path(tempfile.gettempdir()) / "ohva")
 
 
 def _current_platform(platform: str | None = None) -> str:
@@ -418,7 +420,10 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         self._cleanup_initiated = False
         self._action_timeout_seconds = action_timeout_seconds
         self._consecutive_failures = 0
-        self._video_recorder = BrowserVideoRecorder(full_output_save_dir)
+        # Keep the path returned to the model independent of repository and
+        # workspace names. Those names can legitimately equal a configured
+        # secret value, which would redact the path and make publication fail.
+        self._video_recorder = BrowserVideoRecorder(MASK_SAFE_VIDEO_OUTPUT_ROOT)
 
     def __call__(
         self,
