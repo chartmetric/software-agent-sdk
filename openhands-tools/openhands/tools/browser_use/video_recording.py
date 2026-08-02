@@ -87,6 +87,7 @@ class BrowserVideoRecorder:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
+                env=self._external_process_env(),
             )
             await asyncio.sleep(VIDEO_START_SETTLE_SECONDS)
             if self._process.returncode is None:
@@ -147,6 +148,23 @@ class BrowserVideoRecorder:
             return ""
         detail = " ".join(stderr.decode(errors="replace").split())
         return detail[-VIDEO_START_ERROR_MAX_CHARS:]
+
+    @staticmethod
+    def _external_process_env() -> dict[str, str]:
+        """Restore the dynamic-library path before launching system binaries.
+
+        PyInstaller prepends its extraction directory to ``LD_LIBRARY_PATH`` so
+        the bundled agent server can load its own shared libraries. A system
+        ffmpeg inherits that path otherwise and can load an older bundled
+        libstdc++ instead of the host version it was linked against.
+        """
+        environment = os.environ.copy()
+        original_library_path = environment.get("LD_LIBRARY_PATH_ORIG")
+        if original_library_path is None:
+            environment.pop("LD_LIBRARY_PATH", None)
+        else:
+            environment["LD_LIBRARY_PATH"] = original_library_path
+        return environment
 
     def _reset(self) -> None:
         self._process = None

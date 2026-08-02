@@ -47,6 +47,39 @@ async def test_video_recorder_requires_ffmpeg(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("original_library_path", "expected_library_path"),
+    [(None, None), ("/usr/local/lib", "/usr/local/lib")],
+)
+async def test_video_recorder_restores_external_process_library_path(
+    tmp_path, monkeypatch, original_library_path, expected_library_path
+):
+    """System ffmpeg must not inherit PyInstaller's bundled C++ libraries."""
+    monkeypatch.setenv("DISPLAY", ":1")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/_MEI-bundle")
+    if original_library_path is None:
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+    else:
+        monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", original_library_path)
+    process = MagicMock()
+    process.returncode = None
+    process.wait = AsyncMock(return_value=0)
+
+    recorder = BrowserVideoRecorder(str(tmp_path))
+    with (
+        patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch("asyncio.create_subprocess_exec", return_value=process) as create_process,
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        await recorder.start()
+
+    assert create_process.await_args is not None
+    child_env = create_process.await_args.kwargs["env"]
+    assert child_env.get("LD_LIBRARY_PATH") == expected_library_path
+    assert child_env["DISPLAY"] == ":1"
+
+
+@pytest.mark.asyncio
 async def test_video_recorder_retries_transient_ffmpeg_start_failure(
     tmp_path, monkeypatch
 ):
