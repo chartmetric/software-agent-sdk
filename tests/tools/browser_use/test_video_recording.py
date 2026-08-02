@@ -47,6 +47,61 @@ async def test_video_recorder_requires_ffmpeg(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_video_recorder_retries_transient_ffmpeg_start_failure(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DISPLAY", ":1")
+    failed_process = MagicMock()
+    failed_process.returncode = 1
+    failed_process.communicate = AsyncMock(
+        return_value=(None, b"x11grab temporarily unavailable")
+    )
+    running_process = MagicMock()
+    running_process.returncode = None
+    running_process.wait = AsyncMock(return_value=0)
+
+    recorder = BrowserVideoRecorder(str(tmp_path))
+    with (
+        patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=[failed_process, running_process],
+        ) as create_process,
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        result = await recorder.start()
+
+    assert result.startswith("Browser video recording started:")
+    assert create_process.await_count == 2
+    assert recorder._process is running_process
+
+
+@pytest.mark.asyncio
+async def test_video_recorder_reports_bounded_ffmpeg_start_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":1")
+    failed_processes = []
+    for detail in (b"first failure", b"final x11grab failure"):
+        process = MagicMock()
+        process.returncode = 1
+        process.communicate = AsyncMock(return_value=(None, detail))
+        failed_processes.append(process)
+
+    recorder = BrowserVideoRecorder(str(tmp_path))
+    with (
+        patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch("asyncio.create_subprocess_exec", side_effect=failed_processes),
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        result = await recorder.start()
+
+    assert result == (
+        "Error: ffmpeg exited before recording started (1): final x11grab failure"
+    )
+    assert recorder._process is None
+    assert recorder._output_path is None
+
+
+@pytest.mark.asyncio
 async def test_video_recorder_terminates_process_after_timeout(tmp_path, monkeypatch):
     monkeypatch.setenv("DISPLAY", ":1")
     process = MagicMock()

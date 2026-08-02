@@ -11,6 +11,9 @@ from pathlib import Path
 
 
 VIDEO_OUTPUT_DIR = "browser_videos"
+VIDEO_START_ATTEMPTS = 2
+VIDEO_START_SETTLE_SECONDS = 0.75
+VIDEO_START_ERROR_MAX_CHARS = 500
 
 
 class BrowserVideoRecorder:
@@ -52,37 +55,56 @@ class BrowserVideoRecorder:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         self._output_path = (output_dir / f"browser-{timestamp}.webm").resolve()
 
-        self._process = await asyncio.create_subprocess_exec(
-            ffmpeg,
-            "-y",
-            "-f",
-            "x11grab",
-            "-framerate",
-            "15",
-            "-video_size",
-            geometry,
-            "-i",
-            f"{display}.0",
-            "-an",
-            "-c:v",
-            "libvpx-vp9",
-            "-deadline",
-            "realtime",
-            "-cpu-used",
-            "8",
-            "-b:v",
-            "1M",
-            str(self._output_path),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await asyncio.sleep(0.5)
-        if self._process.returncode is not None:
-            returncode = self._process.returncode
-            self._reset()
-            return f"Error: ffmpeg exited before recording started ({returncode})"
+        last_returncode: int | None = None
+        last_error = ""
+        for attempt in range(VIDEO_START_ATTEMPTS):
+            self._process = await asyncio.create_subprocess_exec(
+                ffmpeg,
+                "-hide_banner",
+                "-nostats",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-f",
+                "x11grab",
+                "-framerate",
+                "15",
+                "-video_size",
+                geometry,
+                "-i",
+                f"{display}.0",
+                "-an",
+                "-c:v",
+                "libvpx-vp9",
+                "-deadline",
+                "realtime",
+                "-cpu-used",
+                "8",
+                "-b:v",
+                "1M",
+                str(self._output_path),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.sleep(VIDEO_START_SETTLE_SECONDS)
+            if self._process.returncode is None:
+                return f"Browser video recording started: {self._output_path}"
 
-        return f"Browser video recording started: {self._output_path}"
+            last_returncode = self._process.returncode
+            _, stderr = await self._process.communicate()
+            last_error = self._format_start_error(stderr)
+            self._process = None
+            self._output_path.unlink(missing_ok=True)
+            if attempt + 1 < VIDEO_START_ATTEMPTS:
+                await asyncio.sleep(VIDEO_START_SETTLE_SECONDS)
+
+        self._reset()
+        detail = f": {last_error}" if last_error else ""
+        return (
+            f"Error: ffmpeg exited before recording started ({last_returncode}){detail}"
+        )
 
     async def stop(self) -> str:
         if not self.is_recording:
@@ -118,6 +140,13 @@ class BrowserVideoRecorder:
             and int(width) > 0
             and int(height) > 0
         )
+
+    @staticmethod
+    def _format_start_error(stderr: bytes | None) -> str:
+        if not stderr:
+            return ""
+        detail = " ".join(stderr.decode(errors="replace").split())
+        return detail[-VIDEO_START_ERROR_MAX_CHARS:]
 
     def _reset(self) -> None:
         self._process = None
