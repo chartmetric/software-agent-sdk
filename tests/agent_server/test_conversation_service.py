@@ -1432,13 +1432,17 @@ class TestConversationServiceStartConversation:
     """Test cases for ConversationService.start_conversation method."""
 
     @pytest.mark.asyncio
-    async def test_start_conversation_forwards_initial_message_sender(
+    async def test_start_conversation_forwards_initial_message_identity(
         self, conversation_service
     ):
         with tempfile.TemporaryDirectory() as temp_dir:
+            event_id = str(uuid4())
+            timestamp = "2026-08-02T13:29:42.947000+00:00"
             initial_message = SendMessageRequest(
                 content=[TextContent(text="Hello")],
                 sender="frontend-user",
+                event_id=event_id,
+                timestamp=timestamp,
             )
             request = StartConversationRequest(
                 agent=Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[]),
@@ -1472,6 +1476,10 @@ class TestConversationServiceStartConversation:
             assert message == initial_message.create_message()
             assert run is True
             assert sender == "frontend-user"
+            assert mock_event_service.send_message.await_args.kwargs == {
+                "event_id": event_id,
+                "timestamp": timestamp,
+            }
 
     @pytest.mark.asyncio
     async def test_start_conversation_with_secrets(self, conversation_service):

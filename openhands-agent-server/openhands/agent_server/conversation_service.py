@@ -1479,10 +1479,13 @@ class ConversationService:
             message = Message(
                 role=initial_message.role, content=initial_message.content
             )
-            if initial_message.sender is None:
-                await event_service.send_message(message, True)
-            else:
-                await event_service.send_message(message, True, initial_message.sender)
+            await event_service.send_message(
+                message,
+                True,
+                initial_message.sender,
+                event_id=initial_message.event_id,
+                timestamp=initial_message.timestamp,
+            )
 
         state = await event_service.get_state()
         conversation_info = _compose_conversation_info(event_service.stored, state)

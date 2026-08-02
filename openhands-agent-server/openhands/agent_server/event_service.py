@@ -718,15 +718,23 @@ class EventService:
             await self.stop_goal_loop()
         explicit_interrupt_generation = self._explicit_interrupt_generation
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: conversation.send_message(
-                message,
-                sender,
-                event_id=event_id,
-                timestamp=timestamp,
-            ),
-        )
+        if event_id is None and timestamp is None:
+            if sender is None:
+                await loop.run_in_executor(None, conversation.send_message, message)
+            else:
+                await loop.run_in_executor(
+                    None, conversation.send_message, message, sender
+                )
+        else:
+            await loop.run_in_executor(
+                None,
+                lambda: conversation.send_message(
+                    message,
+                    sender,
+                    event_id=event_id,
+                    timestamp=timestamp,
+                ),
+            )
         if run:
             if self._explicit_interrupt_generation != explicit_interrupt_generation:
                 return
