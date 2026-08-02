@@ -51,7 +51,7 @@ def seed_cache_from_object_storage(cache_path: Path) -> bool:
 
     key = f"{os.getenv(PREFIX_ENV, DEFAULT_PREFIX)}/{cache_path.name}/latest.tar"
     try:
-        import boto3  # imported lazily: unconfigured deployments never need it
+        import boto3  # pyright: ignore[reportMissingImports]
 
         response = boto3.client("s3").get_object(Bucket=bucket, Key=key)
         payload = response["Body"].read()

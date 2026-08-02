@@ -126,7 +126,7 @@ def test_browser_executor_uses_mask_safe_video_output_directory():
     assert executor._video_recorder._output_root == str(
         Path(tempfile.gettempdir()) / "ohva"
     )
-    assert "chartmetric" not in executor._video_recorder._output_root
+    assert "chartmetric" not in (executor._video_recorder._output_root or "")
 
 
 def test_browser_executor_config_passing():
