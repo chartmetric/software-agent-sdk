@@ -71,6 +71,14 @@ class SendMessageRequest(BaseModel):
         default=None,
         description="Optional identifier of the message sender",
     )
+    event_id: str | None = Field(
+        default=None,
+        description="Optional caller-assigned event id for idempotent mirroring",
+    )
+    timestamp: str | None = Field(
+        default=None,
+        description="Optional caller-assigned event timestamp",
+    )
     run: bool = Field(
         default=False,
         description="Whether the agent loop should automatically run if not running",

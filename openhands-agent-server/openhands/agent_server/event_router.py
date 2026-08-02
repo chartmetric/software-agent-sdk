@@ -211,9 +211,20 @@ async def send_message(
     """Send a message to a conversation"""
     message = Message(role=request.role, content=request.content)
     if request.sender is None:
-        await event_service.send_message(message, request.run)
+        await event_service.send_message(
+            message,
+            request.run,
+            event_id=request.event_id,
+            timestamp=request.timestamp,
+        )
     else:
-        await event_service.send_message(message, request.run, request.sender)
+        await event_service.send_message(
+            message,
+            request.run,
+            request.sender,
+            event_id=request.event_id,
+            timestamp=request.timestamp,
+        )
     return Success()
 
 

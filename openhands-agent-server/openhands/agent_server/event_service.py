@@ -704,22 +704,29 @@ class EventService:
         message: Message,
         run: bool = False,
         sender: str | None = None,
+        *,
+        event_id: str | None = None,
+        timestamp: str | None = None,
         _from_goal_loop: bool = False,
     ):
         if not self._conversation:
             raise ValueError("inactive_service")
+        conversation = self._conversation
         # A normal user message supersedes any active /goal loop in this
         # conversation. The goal loop's own messages pass _from_goal_loop=True.
         if not _from_goal_loop:
             await self.stop_goal_loop()
         explicit_interrupt_generation = self._explicit_interrupt_generation
         loop = asyncio.get_running_loop()
-        if sender is None:
-            await loop.run_in_executor(None, self._conversation.send_message, message)
-        else:
-            await loop.run_in_executor(
-                None, self._conversation.send_message, message, sender
-            )
+        await loop.run_in_executor(
+            None,
+            lambda: conversation.send_message(
+                message,
+                sender,
+                event_id=event_id,
+                timestamp=timestamp,
+            ),
+        )
         if run:
             if self._explicit_interrupt_generation != explicit_interrupt_generation:
                 return

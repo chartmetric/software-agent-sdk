@@ -126,6 +126,40 @@ class TestSendMessageEndpoint:
             client.app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
+    async def test_send_message_preserves_caller_event_identity(
+        self, client, sample_conversation_id, mock_event_service
+    ):
+        """A control layer can safely mirror one event across both stores."""
+        client.app.dependency_overrides[get_event_service] = lambda: mock_event_service
+        event_id = str(uuid4())
+        timestamp = "2026-08-02T12:21:44.281539+00:00"
+
+        try:
+            response = client.post(
+                f"/api/conversations/{sample_conversation_id}/events",
+                json={
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Publish the video"}],
+                    "sender": "frontend-user",
+                    "run": True,
+                    "event_id": event_id,
+                    "timestamp": timestamp,
+                },
+            )
+
+            assert response.status_code == 200
+            mock_event_service.send_message.assert_awaited_once()
+            assert mock_event_service.send_message.await_args.args[2] == (
+                "frontend-user"
+            )
+            assert mock_event_service.send_message.await_args.kwargs == {
+                "event_id": event_id,
+                "timestamp": timestamp,
+            }
+        finally:
+            client.app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
     async def test_send_message_with_run_false(
         self, client, sample_conversation_id, mock_event_service
     ):

@@ -1113,7 +1113,14 @@ class RemoteConversation(BaseConversation):
         )
 
     @observe(name="conversation.send_message")
-    def send_message(self, message: str | Message, sender: str | None = None) -> None:
+    def send_message(
+        self,
+        message: str | Message,
+        sender: str | None = None,
+        *,
+        event_id: EventID | None = None,
+        timestamp: str | None = None,
+    ) -> None:
         if isinstance(message, str):
             message = Message(role="user", content=[TextContent(text=message)])
         assert message.role == "user", (
@@ -1126,6 +1133,10 @@ class RemoteConversation(BaseConversation):
         }
         if sender is not None:
             payload["sender"] = sender
+        if event_id is not None:
+            payload["event_id"] = event_id
+        if timestamp is not None:
+            payload["timestamp"] = timestamp
         _send_request(
             self._client,
             "POST",

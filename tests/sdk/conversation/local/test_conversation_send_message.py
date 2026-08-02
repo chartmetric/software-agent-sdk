@@ -76,6 +76,26 @@ def test_send_message_with_string_creates_correct_message():
     assert message.content[0].text == test_text
 
 
+def test_send_message_preserves_supplied_event_identity():
+    agent = SendMessageDummyAgent()
+    conversation = Conversation(agent=agent)
+    event_id = "d85d0303-782f-4bdd-8a43-48fdc347e1ec"
+    timestamp = "2026-08-02T12:21:44.281539+00:00"
+
+    conversation.send_message(
+        "Publish the video",
+        sender="frontend-user",
+        event_id=event_id,
+        timestamp=timestamp,
+    )
+
+    user_event = conversation.state.events[-1]
+    assert isinstance(user_event, MessageEvent)
+    assert user_event.id == event_id
+    assert user_event.timestamp == timestamp
+    assert user_event.sender == "frontend-user"
+
+
 def test_send_message_string_equivalent_to_message_object():
     """Test that send_message with string produces the same result as with Message object."""  # noqa: E501
     agent1 = SendMessageDummyAgent()

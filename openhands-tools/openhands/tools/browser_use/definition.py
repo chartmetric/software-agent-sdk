@@ -355,6 +355,10 @@ Parameters:
 class BrowserGetSecretTool(ToolDefinition[BrowserGetSecretAction, BrowserObservation]):
     """Tool for retrieving a registered secret at runtime."""
 
+    # Browser tools do not consume arbitrary MCP metadata. Narrowing this
+    # inherited field keeps their public OpenAPI component strongly typed.
+    meta: dict[str, str] | None = None
+
     @classmethod
     def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
         return [
@@ -879,6 +883,8 @@ class BrowserStartVideoRecordingTool(
 ):
     """Tool for starting encoded browser video recording."""
 
+    meta: dict[str, str] | None = None
+
     @classmethod
     def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
         return [
@@ -919,6 +925,8 @@ class BrowserStopVideoRecordingTool(
     ToolDefinition[BrowserStopVideoRecordingAction, BrowserObservation]
 ):
     """Tool for stopping encoded browser video recording."""
+
+    meta: dict[str, str] | None = None
 
     @classmethod
     def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:

@@ -196,7 +196,14 @@ class BaseConversation(ABC):
     def conversation_stats(self) -> ConversationStats: ...
 
     @abstractmethod
-    def send_message(self, message: str | Message, sender: str | None = None) -> None:
+    def send_message(
+        self,
+        message: str | Message,
+        sender: str | None = None,
+        *,
+        event_id: EventID | None = None,
+        timestamp: str | None = None,
+    ) -> None:
         """Send a message to the agent.
 
         Args:
@@ -206,6 +213,9 @@ class BaseConversation(ABC):
                    message origin in multi-agent scenarios. For example, when
                    one agent delegates to another, the sender can be set to
                    identify which agent is sending the message.
+            event_id: Optional caller-assigned id used to mirror one event
+                      idempotently across stores.
+            timestamp: Optional caller-assigned event timestamp.
         """
         ...
 
