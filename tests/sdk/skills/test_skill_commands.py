@@ -13,6 +13,7 @@ markdown.  These tests verify:
   - Integration with the Skill model (load + render)
 """
 
+import time
 from pathlib import Path
 
 import pytest
@@ -224,3 +225,22 @@ def test_skill_load_and_render(tmp_path: Path):
     skill_md.write_text("---\nname: test-skill\n---\nBranch: !`echo main`\n")
     skill = Skill.load(skill_md)
     assert skill.render_content() == "Branch: main"
+
+
+def test_a_command_leaving_a_background_child_still_returns():
+    """The timeout has to end the call, not just the shell it started.
+
+    subprocess.run kills the shell on timeout and then waits again for the
+    pipes to close. Anything the command backgrounded inherits the same
+    stdout, so the pipe never reaches EOF and that second wait has no
+    ceiling: in production a skill invocation that normally answers in 0.2s
+    left a conversation with no observation for 25 minutes.
+    """
+    started = time.monotonic()
+
+    # Sleeps far past the timeout, holds stdout, and outlives its parent shell.
+    result = _execute_inline_command("sleep 300 & echo started", timeout=1.0)
+
+    elapsed = time.monotonic() - started
+    assert elapsed < 30, f"call took {elapsed:.1f}s; it should be bounded"
+    assert "timed out" in result or result.strip() == "started"
