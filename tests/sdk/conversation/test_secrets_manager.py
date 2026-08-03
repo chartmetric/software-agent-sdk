@@ -488,3 +488,55 @@ def test_mask_secrets_retries_until_source_succeeds():
     assert secret_registry.mask_secrets_in_output("leak: recovered-value") == (
         "leak: <secret-hidden>"
     )
+
+
+def test_unrequested_configuration_values_do_not_rewrite_ordinary_text():
+    """A registry holds configuration beside credentials.
+
+    Masking rewrites every occurrence of a value, so a short or identifier-like
+    one rewrites the text it collides with: an organization name turned
+    "acme/acme-web-app" into a repository the publication tool rejected as
+    malformed, and a port cut digits out of file sizes and shell commands.
+    Neither value was ever handed to the agent.
+    """
+    secret_registry = SecretRegistry()
+    secret_registry.update_secrets(
+        {
+            "ORG_NAME": "acme",
+            "SERVICE_PORT": "3000",
+            "API_HOSTNAME": "api.acme-internal.example",
+        }
+    )
+
+    masked = secret_registry.mask_secrets_in_output(
+        'create_pr repository="acme/acme-web-app"; total 3000144; port 3000'
+    )
+
+    assert (
+        masked == 'create_pr repository="acme/acme-web-app"; total 3000144; port 3000'
+    )
+
+
+def test_unrequested_long_value_is_still_masked_when_it_stands_alone():
+    """The git-remote token this eager resolution exists for must still mask."""
+    secret_registry = SecretRegistry()
+    secret_registry.update_secrets({"GIT_TOKEN": "ghp_0123456789abcdefghijABCDEF"})
+
+    masked = secret_registry.mask_secrets_in_output(
+        "https://x-access-token:ghp_0123456789abcdefghijABCDEF@github.com/acme/web.git"
+    )
+
+    assert "ghp_0123456789abcdefghijABCDEF" not in masked
+    assert "<secret-hidden>" in masked
+
+
+def test_a_value_the_agent_asked_for_is_masked_whatever_its_length():
+    """Length only excuses values nobody requested."""
+    secret_registry = SecretRegistry()
+    secret_registry.update_secrets({"ACCOUNT": '{"password": "s3cret"}'})
+
+    assert secret_registry.get_secret_value("ACCOUNT", "password") == "s3cret"
+
+    assert secret_registry.mask_secrets_in_output("typed s3cret") == (
+        "typed <secret-hidden>"
+    )

@@ -1,6 +1,7 @@
 """Secrets manager for handling sensitive data in conversations."""
 
 import json
+import re
 import time
 from collections.abc import Collection, Mapping
 from threading import RLock
@@ -17,6 +18,26 @@ logger = get_logger(__name__)
 
 # Back-off before retrying a failed source; a failed lookup masks nothing anyway.
 FAILED_LOOKUP_RETRY_SECONDS: Final[float] = 60.0
+
+# Shortest value that masking will replace when nothing ever asked for it.
+#
+# Masking rewrites every occurrence of a value, so a short one that also occurs
+# as ordinary text rewrites that text too. Registries hold configuration beside
+# credentials -- a region, a port, an account name -- and those collide: an
+# organization name turned "acme/acme-web" into a repository the publication
+# tool rejected as malformed, and a numeric one cut digits out of file sizes
+# and shell commands the agent then re-ran. Below this length a value cannot be
+# told apart from the text around it, so masking it corrupts more than it
+# protects. A value the agent actually asked for is exempt: it was handed over
+# to be used, so it is masked whatever its length.
+MIN_UNREQUESTED_MASK_LENGTH: Final[int] = 12
+
+# Characters that make a match part of a larger identifier rather than a value
+# standing on its own. "acme" inside "acme/acme-web-app" is the repository's
+# name, not a credential occurrence, and replacing it produces a name no tool
+# accepts. Applied only to values nobody asked for; a value handed to the agent
+# is replaced wherever it appears.
+_IDENTIFIER_CHARACTERS: Final[str] = r"A-Za-z0-9_\-"
 
 
 class SecretRegistry(OpenHandsModel):
@@ -41,6 +62,8 @@ class SecretRegistry(OpenHandsModel):
     _exported_values: dict[str, str] = PrivateAttr(default_factory=dict)
     _exported_values_lock: RLock = PrivateAttr(default_factory=RLock)
     _failed_lookups: dict[str, float] = PrivateAttr(default_factory=dict)
+    # Names resolved only so masking could see them, never requested by anyone.
+    _unrequested_names: set[str] = PrivateAttr(default_factory=set)
 
     def track_exported_values(self, values: Mapping[str, str]) -> None:
         """Track values for output masking."""
@@ -167,17 +190,43 @@ class SecretRegistry(OpenHandsModel):
             failed_at = self._failed_lookups.get(key)
             if failed_at is not None and now - failed_at < FAILED_LOOKUP_RETRY_SECONDS:
                 continue
-            if not self.get_secret_value(key):
+            if not self._resolve_for_masking(key):
                 self._failed_lookups[key] = now
 
         masked_text = text
         with self._exported_values_lock:
-            exported_values = tuple(self._exported_values.values())
-        for value in exported_values:
-            if value:
+            exported_items = tuple(self._exported_values.items())
+            unrequested = frozenset(self._unrequested_names)
+        for name, value in exported_items:
+            if not value:
+                continue
+            if name not in unrequested:
                 masked_text = masked_text.replace(value, "<secret-hidden>")
+                continue
+            if len(value) < MIN_UNREQUESTED_MASK_LENGTH:
+                continue
+            masked_text = re.sub(
+                rf"(?<![{_IDENTIFIER_CHARACTERS}]){re.escape(value)}"
+                rf"(?![{_IDENTIFIER_CHARACTERS}])",
+                "<secret-hidden>",
+                masked_text,
+            )
 
         return masked_text
+
+    def _resolve_for_masking(self, name: str) -> str | None:
+        """Resolve a secret nobody asked for, so masking can recognise it.
+
+        The value can still reach the output without the command naming it --
+        a token inside a git remote URL is the case this exists for -- but it
+        was never handed to the agent, so it is held to the length rule above.
+        """
+        with self._exported_values_lock:
+            before = frozenset(self._exported_values)
+        value = self.get_secret_value(name)
+        with self._exported_values_lock:
+            self._unrequested_names.update(set(self._exported_values) - before)
+        return value
 
     def mask_secrets_in_data(self, value: Any) -> Any:
         """Mask resolved secret values in JSON-compatible data."""
@@ -245,6 +294,9 @@ class SecretRegistry(OpenHandsModel):
                         f"{name}.{json_field}" if json_field is not None else name
                     )
                     self.track_exported_values({exported_name: value})
+                    # Asked for by name: mask it regardless of length from now on.
+                    with self._exported_values_lock:
+                        self._unrequested_names.discard(exported_name)
             return value
         except (OSError, TimeoutError) as e:
             # Network/IO errors - likely transient, log and return None
