@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,6 +21,7 @@ from openhands.sdk.tool.builtins import (
     InvokeSkillObservation,
     InvokeSkillTool,
 )
+from openhands.sdk.tool.builtins.invoke_skill import InvokeSkillExecutor
 from openhands.sdk.workspace.local import LocalWorkspace
 
 
@@ -395,3 +397,36 @@ def test_agent_auto_attaches_invoke_skill_tool(
 
     attached = "invoke_skill" in agent._tools
     assert attached is expect_attached
+
+
+def test_footer_never_touches_the_filesystem(monkeypatch):
+    """The footer names a directory; it must not stat the workspace to do it.
+
+    Skills load from the conversation's workspace, which in production is a
+    networked mount. A stat there can block in an uninterruptible syscall, and
+    the tool has no way to abandon it: one production conversation emitted
+    invoke_skill and never received an observation, against a normal 0.1-0.3s.
+    Nothing about naming a path requires asking the filesystem anything.
+    """
+    calls: list[str] = []
+
+    def _forbid(name):
+        def _fail(*args, **kwargs):
+            calls.append(name)
+            raise AssertionError(f"{name} touched the filesystem")
+
+        return _fail
+
+    monkeypatch.setattr(Path, "resolve", _forbid("Path.resolve"))
+    monkeypatch.setattr(Path, "is_file", _forbid("Path.is_file"))
+    monkeypatch.setattr(Path, "exists", _forbid("Path.exists"))
+    monkeypatch.setattr(Path, "stat", _forbid("Path.stat"))
+
+    rendered = InvokeSkillExecutor._append_skill_location_footer(
+        "body",
+        "/workspace/project/.agents/skills/design-system/SKILL.md",
+        Path("/workspace/project"),
+    )
+
+    assert calls == []
+    assert ".agents/skills/design-system" in rendered

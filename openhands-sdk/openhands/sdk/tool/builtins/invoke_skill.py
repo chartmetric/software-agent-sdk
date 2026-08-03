@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
@@ -47,6 +48,10 @@ class InvokeSkillObservation(Observation):
         t.append(self.text)
         return t
 
+
+# A skill's on-disk source points at its markdown file; anything else is a
+# sentinel describing provenance.
+_SKILL_FILE_SUFFIX = ".md"
 
 TOOL_DESCRIPTION = """Invoke a skill by name.
 
@@ -138,18 +143,30 @@ class InvokeSkillExecutor(ToolExecutor):
         """
         if not source:
             return rendered
-        try:
-            skill_md = Path(source).expanduser().resolve(strict=True)
-        except (OSError, RuntimeError, ValueError):
+        # Work the path out lexically. Every stat here would have run against
+        # the workspace the skill was loaded from, which on a networked mount
+        # can block in an uninterruptible syscall -- and none of them earn
+        # that: the footer only names a directory for the model to read. A
+        # skill that was loaded has a source; confirming the file is still
+        # there buys nothing and can cost the whole conversation.
+        # Sentinels like "local" or "github:owner/repo" name where a skill came
+        # from, not where it lives; they must not turn into a made-up directory.
+        # A loaded skill's on-disk source is an absolute path to its file.
+        expanded = os.path.expanduser(source)
+        if not os.path.isabs(expanded) or not expanded.endswith(_SKILL_FILE_SUFFIX):
             return rendered
-        if not skill_md.is_file():
+        try:
+            skill_md = Path(expanded)
+        except (RuntimeError, ValueError):
             return rendered
         skill_dir = skill_md.parent
         display: Path = skill_dir
         if working_dir is not None:
             try:
-                display = skill_dir.relative_to(working_dir.resolve())
-            except (ValueError, OSError):
+                display = skill_dir.relative_to(
+                    Path(os.path.abspath(os.path.expanduser(str(working_dir))))
+                )
+            except ValueError:
                 pass  # skill lives outside working_dir, keep absolute
         footer = (
             f"\n\n---\n"
