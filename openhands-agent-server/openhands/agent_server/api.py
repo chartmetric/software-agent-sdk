@@ -98,6 +98,11 @@ from openhands.tools.terminal.constants import TMUX_SOCKET_NAME
 
 logger = get_logger(__name__)
 
+# asyncio keeps only a weak reference to a bare task, so a startup task that
+# nothing awaits can be garbage collected mid-run. Hold them here for their
+# lifetime.
+_BACKGROUND_STARTUP_TASKS: set[asyncio.Task] = set()
+
 
 def _default_server_tmux_tmpdir() -> Path:
     return Path(tempfile.gettempdir()) / f"openhands-agent-server-{os.getpid()}"
@@ -183,8 +188,20 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
                 logger.info("VSCode service is disabled")
 
         async def start_desktop_service():
+            # Runs detached from startup, so it owns its failures: an
+            # unhandled one here would surface as an "exception was never
+            # retrieved" warning rather than anything actionable, and the
+            # desktop is optional to every request path.
             if desktop_service is not None:
-                desktop_started = await desktop_service.start()
+                try:
+                    desktop_started = await desktop_service.start()
+                except Exception:
+                    logger.warning(
+                        "Desktop service raised while starting, "
+                        "continuing without desktop",
+                        exc_info=True,
+                    )
+                    return
                 if desktop_started:
                     logger.info("Desktop service started successfully")
                 else:
@@ -208,10 +225,18 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
             await served_app_service.start()
             logger.info("Served app discovery started")
 
-        # Start all services concurrently
+        # The desktop is the slowest of these and the only one nothing waits
+        # on: TigerVNC plus the noVNC proxy took 5.1s of a 17.36s sandbox
+        # readiness, and until the gather returned the server answered no
+        # request at all -- including /alive. No request path needs it, so let
+        # it come up on its own while the server starts serving.
+        desktop_task = asyncio.create_task(start_desktop_service())
+        _BACKGROUND_STARTUP_TASKS.add(desktop_task)
+        desktop_task.add_done_callback(_BACKGROUND_STARTUP_TASKS.discard)
+
+        # Start the remaining services concurrently
         results = await asyncio.gather(
             start_vscode_service(),
-            start_desktop_service(),
             start_tool_preload_service(),
             start_served_app_service(),
             return_exceptions=True,
@@ -236,6 +261,14 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
                     await vscode_service.stop()
 
             async def stop_desktop_service():
+                # The start runs detached, so a shutdown can land while it is
+                # still bringing TigerVNC up. Let it finish first, otherwise
+                # stop() tears down a half-built desktop and leaves the
+                # processes it had not yet recorded.
+                if not desktop_task.done():
+                    desktop_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await desktop_task
                 if desktop_service is not None:
                     await desktop_service.stop()
 
