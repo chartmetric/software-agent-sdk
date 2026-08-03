@@ -540,3 +540,32 @@ def test_a_value_the_agent_asked_for_is_masked_whatever_its_length():
     assert secret_registry.mask_secrets_in_output("typed s3cret") == (
         "typed <secret-hidden>"
     )
+
+
+def test_an_unrequested_endpoint_is_not_masked_out_of_a_url_it_prefixes():
+    """A registry holds endpoint URLs beside credentials.
+
+    Masking the host out of "http://host:3000/dashboard" leaves an address the
+    agent cannot navigate to, and the preview it was told to verify becomes
+    unreachable. Nobody asked for the value; it is configuration.
+    """
+    secret_registry = SecretRegistry()
+    secret_registry.update_secrets({"APP_ENDPOINT": "http://10.0.0.7:3000"})
+
+    masked = secret_registry.mask_secrets_in_output(
+        'navigate to "http://10.0.0.7:3000/dashboard"'
+    )
+
+    assert masked == 'navigate to "http://10.0.0.7:3000/dashboard"'
+
+
+def test_an_unrequested_token_in_a_remote_url_still_masks():
+    """The case the eager resolution exists for must survive the exemption."""
+    secret_registry = SecretRegistry()
+    secret_registry.update_secrets({"GIT_TOKEN": "ghp_0123456789abcdefghijABCDEF"})
+
+    masked = secret_registry.mask_secrets_in_output(
+        "https://x-access-token:ghp_0123456789abcdefghijABCDEF@github.com/acme/web.git"
+    )
+
+    assert "ghp_0123456789abcdefghijABCDEF" not in masked

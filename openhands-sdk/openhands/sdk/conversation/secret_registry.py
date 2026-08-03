@@ -35,9 +35,19 @@ MIN_UNREQUESTED_MASK_LENGTH: Final[int] = 12
 # Characters that make a match part of a larger identifier rather than a value
 # standing on its own. "acme" inside "acme/acme-web-app" is the repository's
 # name, not a credential occurrence, and replacing it produces a name no tool
-# accepts. Applied only to values nobody asked for; a value handed to the agent
-# is replaced wherever it appears.
+# accepts. The slash matters as much as the hyphen: a registry holds endpoint
+# URLs beside credentials, and masking the host out of
+# "http://host:3000/dashboard" leaves the agent an address it cannot navigate
+# to. Applied only to values nobody asked for; a value handed to the agent is
+# replaced wherever it appears, and a token inside
+# "https://x-access-token:TOKEN@host/repo.git" still masks because "@" is not
+# one of these.
 _IDENTIFIER_CHARACTERS: Final[str] = r"A-Za-z0-9_\-"
+# The trailing side additionally treats a path separator as continuation: a
+# value that another path hangs off is a prefix, not an occurrence. The leading
+# side must not, or the token in "https://TOKEN@host/repo.git" would be
+# excused by the slashes in front of it.
+_TRAILING_CONTINUATION_CHARACTERS: Final[str] = _IDENTIFIER_CHARACTERS + "/"
 
 
 class SecretRegistry(OpenHandsModel):
@@ -207,7 +217,7 @@ class SecretRegistry(OpenHandsModel):
                 continue
             masked_text = re.sub(
                 rf"(?<![{_IDENTIFIER_CHARACTERS}]){re.escape(value)}"
-                rf"(?![{_IDENTIFIER_CHARACTERS}])",
+                rf"(?![{_TRAILING_CONTINUATION_CHARACTERS}])",
                 "<secret-hidden>",
                 masked_text,
             )
