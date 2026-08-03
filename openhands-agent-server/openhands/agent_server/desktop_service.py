@@ -83,6 +83,17 @@ class DesktopService:
         if not xvnc_running:
             logger.info("Starting TigerVNC on %s (%s)...", display, vnc_geometry)
             # vncserver <DISPLAY> -geometry <geom> -depth 24 -localhost yes
+            #
+            # UseBlacklist=0 turns off TigerVNC's per-address blocking.
+            # The server already listens on loopback only and every viewer
+            # arrives through the noVNC proxy, so the sole address it can ever
+            # see is 127.0.0.1. A handful of dropped connections -- a reloaded
+            # viewer tab, a proxy restart -- was enough to blacklist it, and
+            # from then on the server refused every connection with
+            # "Connections: Blacklisted: 127.0.0.1" while still looking
+            # healthy: the web page loaded, the WebSocket connected, and the
+            # session never painted. Blocking the one address that can reach a
+            # loopback-only server protects nothing.
             rc = (
                 await asyncio.to_thread(
                     subprocess.run,
@@ -97,6 +108,10 @@ class DesktopService:
                         "yes",
                         "-SecurityTypes",
                         "None",
+                        # One token: the vncserver wrapper only splits the
+                        # options it knows, so "-UseBlacklist" "0" would leave
+                        # "0" to be read as an ssh host and fail the start.
+                        "-UseBlacklist=0",
                     ],
                     env=env,
                 )
