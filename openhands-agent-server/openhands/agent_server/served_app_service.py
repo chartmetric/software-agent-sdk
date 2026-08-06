@@ -41,9 +41,14 @@ DISCOVERY_INTERVAL_SECONDS = 2
 PROBE_TIMEOUT_SECONDS = 1
 # 60002 is the desktop stream; it was absent, so the desktop was discovered as a
 # served app of its own.
-RESERVED_PORTS = frozenset({22, 8000, 8001, 8002, 60000, 60001, 60002}) | set(
-    WORKER_PORTS
-)
+#
+# The worker ports are deliberately NOT reserved. A repository service handed one
+# of them as its PORT is a real served app that happens to already sit where the
+# control plane routes that worker, and `_reconcile` handles exactly that by
+# binding no relay for it. Reserving them instead hid such an app from discovery
+# and then let a *different* app be relayed onto the port it was already serving,
+# so the panel offered one app under the other's name.
+RESERVED_PORTS = frozenset({22, 8000, 8001, 8002, 60000, 60001, 60002})
 PROC_NET_PATHS = (Path("/proc/net/tcp"), Path("/proc/net/tcp6"))
 
 
