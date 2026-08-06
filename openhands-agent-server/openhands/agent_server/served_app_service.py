@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,10 +11,39 @@ from openhands.sdk.logger import get_logger
 
 logger = get_logger(__name__)
 
-WORKER_PORTS = (8011, 8012)
+DEFAULT_WORKER_PORTS = (8011, 8012)
+
+
+def _configured_worker_ports() -> tuple[int, ...]:
+    """The ports the control plane publishes this sandbox's workers on.
+
+    They are injected as WORKER_1/WORKER_2 and the proxy routes each name to the
+    port it names. Relaying on a different pair meant an app that bound a worker
+    port directly was also relayed onto another one, so one web app was
+    discovered twice and reported as two apps -- the second routed to a port
+    nothing listened on. It also left the real worker ports out of the reserved
+    set, so a repository service handed one of them as its PORT could collide
+    with a relay. Fall back to the historical pair when nothing is injected.
+    """
+    ports: list[int] = []
+    for name in ("WORKER_1", "WORKER_2"):
+        raw = os.environ.get(name, "").strip()
+        if not raw.isdigit():
+            continue
+        port = int(raw)
+        if 0 < port < 65536:
+            ports.append(port)
+    return tuple(ports) if len(ports) == 2 else DEFAULT_WORKER_PORTS
+
+
+WORKER_PORTS = _configured_worker_ports()
 DISCOVERY_INTERVAL_SECONDS = 2
 PROBE_TIMEOUT_SECONDS = 1
-RESERVED_PORTS = frozenset({22, 8000, 8001, 8002, 60000, 60001})
+# 60002 is the desktop stream; it was absent, so the desktop was discovered as a
+# served app of its own.
+RESERVED_PORTS = frozenset({22, 8000, 8001, 8002, 60000, 60001, 60002}) | set(
+    WORKER_PORTS
+)
 PROC_NET_PATHS = (Path("/proc/net/tcp"), Path("/proc/net/tcp6"))
 
 
