@@ -804,6 +804,38 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         """Stop the visible browser recording and finalize the WebM file."""
         return await self._video_recorder.stop()
 
+    # Live CDP Screencast
+    #
+    # Unlike the methods above, these are plain *synchronous* entry points,
+    # not agent-invocable BrowserActions: nothing about "someone is watching
+    # a live view" belongs in the LLM's tool surface. They mirror the
+    # sync-to-async bridge `__call__` itself uses (`_async_executor.run_async`)
+    # so infrastructure code on another thread/loop (e.g. the agent-server's
+    # screencast WebSocket service) can drive them the same way
+    # `DesktopService.navigate()` drives `BrowserNavigateAction` — via
+    # `asyncio.to_thread(executor.start_screencast, on_frame)`.
+    def start_screencast(
+        self, on_frame: Callable[[str, dict[str, Any]], None], **kwargs: Any
+    ) -> bool:
+        """Start CDP screencast streaming on the shared browser session.
+
+        `on_frame` is invoked on the browser's dedicated background thread —
+        callers that need to reach another event loop must hop via
+        `asyncio.run_coroutine_threadsafe` themselves.
+        """
+
+        async def _do_start() -> bool:
+            await self._ensure_initialized()
+            return await self._server._start_screencast(on_frame, **kwargs)
+
+        return self._async_executor.run_async(_do_start)
+
+    def stop_screencast(self) -> bool:
+        """Stop CDP screencast streaming, if active."""
+        if not self._initialized:
+            return True
+        return self._async_executor.run_async(self._server._stop_screencast)
+
     async def close_browser(self) -> str:
         """Close the browser session."""
         if self._initialized:

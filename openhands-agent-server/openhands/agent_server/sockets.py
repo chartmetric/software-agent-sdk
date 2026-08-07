@@ -15,7 +15,7 @@ authentication.  Three auth methods are supported (highest to lowest precedence)
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -47,6 +47,10 @@ from openhands.agent_server.models import (
     ServerErrorEvent,
 )
 from openhands.agent_server.pub_sub import MaxSubscribersError, Subscriber
+from openhands.agent_server.screencast_service import (
+    ScreencastService,
+    get_default_screencast_service,
+)
 from openhands.sdk import Event, Message
 from openhands.sdk.utils.paging import page_iterator
 
@@ -54,6 +58,7 @@ from openhands.sdk.utils.paging import page_iterator
 sockets_router = APIRouter(prefix="/sockets", tags=["WebSockets"])
 conversation_service = get_default_conversation_service()
 bash_event_service = get_default_bash_event_service()
+screencast_service = get_default_screencast_service()
 logger = logging.getLogger(__name__)
 
 
@@ -100,6 +105,18 @@ def _get_bash_event_service(websocket: WebSocket) -> BashEventService:
     if isinstance(service, BashEventService):
         return service
     return bash_event_service
+
+
+def _get_screencast_service(websocket: WebSocket) -> ScreencastService:
+    """Return the ScreencastService for this FastAPI app instance.
+
+    Same app.state-first, module-singleton-fallback lookup as
+    `_get_bash_event_service` — see that function's docstring.
+    """
+    service = getattr(websocket.app.state, "screencast_service", None)
+    if isinstance(service, ScreencastService):
+        return service
+    return screencast_service
 
 
 def _resolve_websocket_session_api_key(
@@ -479,6 +496,52 @@ async def bash_events_socket(
         await bash_service.unsubscribe_from_events(subscriber_id)
 
 
+@sockets_router.websocket("/screencast")
+async def screencast_socket(
+    websocket: WebSocket,
+    session_api_key: Annotated[str | None, Query(alias="session_api_key")] = None,
+):
+    """WebSocket endpoint for a live, read-only view of the agent's browser.
+
+    Streams ``{"type": "frame", "data": "<base64 jpeg>", "metadata": {...}}``
+    messages captured via CDP `Page.startScreencast` on the shared browser
+    tool session. No `conversation_id` is required: the browser tool's CDP
+    session is a process-wide singleton shared across the whole conversation
+    and its subagents, exactly like `/bash-events`.
+
+    The underlying screencast only runs while at least one client is
+    connected (see `ScreencastService`); this is a passive viewer, so no
+    client-to-server payload is expected on this socket.
+    """
+    if not await _accept_authenticated_websocket(websocket, session_api_key):
+        return
+
+    service = _get_screencast_service(websocket)
+    logger.info("Screencast Websocket Connected")
+    subscriber = _ScreencastWebSocketSubscriber(websocket)
+    try:
+        subscriber_id = await service.subscribe(subscriber)
+    except MaxSubscribersError:
+        logger.warning("Subscriber limit reached for screencast")
+        await websocket.close(code=1013, reason="Too many screencast viewers")
+        return
+
+    try:
+        while True:
+            try:
+                data = await websocket.receive_json()
+                if _is_auth_control_message(data):
+                    continue
+                # Read-only viewer: anything else received is unexpected and
+                # ignored rather than erroring, to keep the stream resilient.
+            except WebSocketDisconnect:
+                logger.info("Screencast websocket disconnected")
+                return
+    finally:
+        await subscriber.close()
+        await service.unsubscribe(subscriber_id)
+
+
 async def _send_event(event: Event, websocket: WebSocket):
     if not _is_websocket_connected(websocket):
         # Client already disconnected; the pub/sub callback was racing with
@@ -589,3 +652,51 @@ class _BashWebSocketSubscriber(Subscriber[BashEventBase]):
 
     async def __call__(self, event: BashEventBase):
         await _send_bash_event(event, self.websocket)
+
+
+@dataclass
+class _ScreencastWebSocketSubscriber(Subscriber[dict]):
+    """WebSocket subscriber for live screencast frames.
+
+    A live view frame is stale the instant a newer one exists, so this
+    subscriber keeps only the single freshest pending frame (dropping an
+    older queued one rather than growing the queue) and drains it on a
+    dedicated sender task — a slow client falls behind by skipping frames,
+    never by blocking screencast publication for every other viewer.
+    """
+
+    websocket: WebSocket
+    _queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=1))
+    _sender_task: asyncio.Task | None = field(default=None)
+
+    def __post_init__(self) -> None:
+        self._sender_task = asyncio.create_task(self._send_loop())
+
+    async def __call__(self, message: dict) -> None:
+        if self._queue.full():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        await self._queue.put(message)
+
+    async def _send_loop(self) -> None:
+        while True:
+            message = await self._queue.get()
+            if not _is_websocket_connected(self.websocket):
+                continue
+            try:
+                await self.websocket.send_json(message)
+            except (RuntimeError, WebSocketDisconnect) as e:
+                logger.debug(f"error_sending_screencast_frame_disconnected: {e}")
+            except Exception:
+                logger.exception("error_sending_screencast_frame", stack_info=True)
+
+    async def close(self) -> None:
+        if self._sender_task is not None:
+            self._sender_task.cancel()
+            try:
+                await self._sender_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._sender_task = None

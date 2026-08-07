@@ -1,9 +1,13 @@
+from collections.abc import Callable
+from typing import Any
+
 from browser_use.browser.events import TypeTextEvent
 from browser_use.dom.markdown_extractor import extract_clean_markdown
 
 from openhands.sdk import get_logger
 from openhands.tools.browser_use.logging_fix import LogSafeBrowserUseServer
 from openhands.tools.browser_use.recording import RecordingSession
+from openhands.tools.browser_use.screencast import ScreencastSession
 
 
 logger = get_logger(__name__)
@@ -28,11 +32,25 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
         self._injected_script_ids: list[str] = []
         # Recording session - encapsulates all recording state and logic
         self._recording_session: RecordingSession | None = None
+        # Screencast session - live CDP frame streaming for passive viewers
+        self._screencast_session: ScreencastSession | None = None
 
     @property
     def _is_recording(self) -> bool:
         """Check if recording is currently active."""
         return self._recording_session is not None and self._recording_session.is_active
+
+    async def _cleanup_screencast(self) -> None:
+        """Stop any active screencast. Should be called when the browser
+        session is being closed."""
+        if self._screencast_session is None:
+            return
+        try:
+            await self._screencast_session.stop()
+        except Exception as e:
+            logger.debug(f"Screencast cleanup error (non-fatal): {e}")
+        finally:
+            self._screencast_session = None
 
     async def _cleanup_recording(self) -> None:
         """Cleanup recording session resources.
@@ -56,20 +74,25 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
             self._recording_session = None
 
     async def _close_browser(self) -> str:
-        """Close the browser session and cleanup recording resources."""
+        """Close the browser session and cleanup recording/screencast resources."""
         await self._cleanup_recording()
+        await self._cleanup_screencast()
         return await super()._close_browser()
 
     async def _close_session(self, session_id: str) -> str:
-        """Close a specific browser session and cleanup recording if needed."""
-        # Cleanup recording if closing the current session
+        """Close a specific browser session and cleanup recording/screencast
+        if needed."""
+        # Cleanup recording/screencast if closing the current session
         if self.browser_session and self.browser_session.id == session_id:
             await self._cleanup_recording()
+            await self._cleanup_screencast()
         return await super()._close_session(session_id)
 
     async def _close_all_sessions(self) -> str:
-        """Close all active browser sessions and cleanup recording resources."""
+        """Close all active browser sessions and cleanup recording/screencast
+        resources."""
         await self._cleanup_recording()
+        await self._cleanup_screencast()
         return await super()._close_all_sessions()
 
     def set_inject_scripts(self, scripts: list[str]) -> None:
@@ -181,6 +204,31 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
         result = await self._recording_session.stop(self.browser_session)
         # Reset the session after stopping
         self._recording_session.reset()
+        return result
+
+    async def _start_screencast(
+        self, on_frame: Callable[[str, dict[str, Any]], None], **kwargs
+    ) -> bool:
+        """Start streaming CDP screencast frames for the current session.
+
+        `on_frame` is invoked synchronously on every `Page.screencastFrame`
+        event with `(base64_jpeg_data, metadata_dict)`. Returns True if the
+        screencast started, False otherwise (never raises).
+        """
+        if not self.browser_session:
+            return False
+
+        self._screencast_session = ScreencastSession()
+        return await self._screencast_session.start(
+            self.browser_session, on_frame, **kwargs
+        )
+
+    async def _stop_screencast(self) -> bool:
+        """Stop streaming CDP screencast frames, if active."""
+        if not self._screencast_session:
+            return True
+        result = await self._screencast_session.stop()
+        self._screencast_session = None
         return result
 
     async def _get_storage(self) -> str:
