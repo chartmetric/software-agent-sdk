@@ -284,6 +284,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
     _cleanup_initiated: bool
     _close_lock: threading.Lock
     _action_timeout_seconds: float
+    _control_owner: str
 
     @staticmethod
     @functools.cache
@@ -420,6 +421,11 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         self._cleanup_initiated = False
         self._action_timeout_seconds = action_timeout_seconds
         self._consecutive_failures = 0
+        # Screencast human-takeover lock. Lives on this shared, process-wide
+        # executor (not on ScreencastService) so it also blocks subagents,
+        # which reuse the same executor instance via
+        # BrowserToolSet.get_or_create_shared_executor().
+        self._control_owner = "agent"
         # Keep the path returned to the model independent of repository and
         # workspace names. Those names can legitimately equal a configured
         # secret value, which would redact the path and make publication fail.
@@ -595,6 +601,17 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             BrowserStopVideoRecordingAction,
             BrowserSwitchTabAction,
         )
+
+        if self._control_owner == "human":
+            return BrowserObservation.from_text(
+                text=(
+                    "Browser control is currently held by a human user via the "
+                    "live screencast view. Wait for them to return control "
+                    "before using the browser tool again."
+                ),
+                is_error=True,
+                full_output_save_dir=self.full_output_save_dir,
+            )
 
         try:
             result = ""
@@ -835,6 +852,39 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         if not self._initialized:
             return True
         return self._async_executor.run_async(self._server._stop_screencast)
+
+    def dispatch_screencast_input(self, kind: str, payload: dict[str, Any]) -> None:
+        """Dispatch a mouse/key event for human screencast takeover.
+
+        `kind` is "mouse" or "key"; anything else is ignored. No-op if the
+        browser session hasn't been initialized yet. Same threading contract
+        as start_screencast/stop_screencast.
+        """
+        if not self._initialized:
+            return
+
+        async def _do_dispatch() -> None:
+            if kind == "mouse":
+                await self._server._dispatch_screencast_mouse(**payload)
+            elif kind == "key":
+                await self._server._dispatch_screencast_key(**payload)
+
+        self._async_executor.run_async(_do_dispatch)
+
+    def set_control_owner(self, owner: str) -> None:
+        """Set who currently controls the browser: "agent" or "human".
+
+        Called by the agent-server's screencast take_control/release_control
+        handling (via ScreencastService). This lock lives on the shared,
+        process-wide executor rather than on ScreencastService itself so it
+        also blocks subagents, which reuse this same executor instance via
+        BrowserToolSet.get_or_create_shared_executor().
+        """
+        self._control_owner = owner
+
+    def is_human_controlling(self) -> bool:
+        """Whether a human currently holds the screencast takeover lock."""
+        return self._control_owner == "human"
 
     async def close_browser(self) -> str:
         """Close the browser session."""

@@ -231,6 +231,22 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
         self._screencast_session = None
         return result
 
+    async def _dispatch_screencast_mouse(self, **kwargs) -> None:
+        """Dispatch a mouse event for human screencast takeover, if a
+        screencast session is active. No-op (never raises) otherwise --
+        see `ScreencastSession.dispatch_mouse`'s Error Handling Policy."""
+        if not self._screencast_session:
+            return
+        await self._screencast_session.dispatch_mouse(**kwargs)
+
+    async def _dispatch_screencast_key(self, **kwargs) -> None:
+        """Dispatch a keyboard event for human screencast takeover, if a
+        screencast session is active. No-op (never raises) otherwise --
+        see `ScreencastSession.dispatch_key`'s Error Handling Policy."""
+        if not self._screencast_session:
+            return
+        await self._screencast_session.dispatch_key(**kwargs)
+
     async def _get_storage(self) -> str:
         """Get browser storage (cookies, local storage, session storage)."""
         import json

@@ -48,6 +48,7 @@ class SlowServiceBrowserExecutor(BrowserToolExecutor):
         self._action_timeout_seconds = action_timeout_seconds
         self.full_output_save_dir = None
         self._consecutive_failures = 0
+        self._control_owner = "agent"
 
     async def navigate(self, url: str, new_tab: bool = False) -> str:
         del new_tab
@@ -216,6 +217,39 @@ async def test_browser_executor_unsupported_action_handling(mock_browser_executo
     result = await mock_browser_executor._execute_action(action)
 
     assert_browser_observation_error(result, "Unsupported action type")
+
+
+async def test_browser_executor_blocks_action_while_human_controls(
+    mock_browser_executor,
+):
+    """A human screencast takeover (ScreencastService.take_control ->
+    executor.set_control_owner("human")) must fail the agent's next
+    browser_* call immediately with a clear error, rather than executing it
+    or hanging until control is returned."""
+    mock_browser_executor.set_control_owner("human")
+
+    action = BrowserNavigateAction(url="https://example.com")
+    result = await mock_browser_executor._execute_action(action)
+
+    assert_browser_observation_error(result, "held by a human user")
+    assert mock_browser_executor.is_human_controlling() is True
+
+
+@patch("openhands.tools.browser_use.impl.BrowserToolExecutor.navigate")
+async def test_browser_executor_resumes_after_control_released(
+    mock_navigate, mock_browser_executor
+):
+    """Releasing control (executor.set_control_owner("agent")) must restore
+    normal browser_* tool access."""
+    mock_navigate.return_value = "ok"
+    mock_browser_executor.set_control_owner("human")
+    mock_browser_executor.set_control_owner("agent")
+
+    action = BrowserNavigateAction(url="https://example.com")
+    result = await mock_browser_executor._execute_action(action)
+
+    assert_browser_observation_success(result, "ok")
+    assert mock_browser_executor.is_human_controlling() is False
 
 
 @patch("openhands.tools.browser_use.impl.BrowserToolExecutor.navigate")

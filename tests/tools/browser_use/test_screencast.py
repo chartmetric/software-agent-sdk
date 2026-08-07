@@ -50,7 +50,20 @@ def mock_browser_session(mock_cdp_session):
     browser_session.cdp_client.send.Page = MagicMock()
     browser_session.cdp_client.send.Page.stopScreencast = AsyncMock()
     browser_session.cdp_client.send.Page.screencastFrameAck = AsyncMock()
+    browser_session.cdp_client.send.Input = MagicMock()
+    browser_session.cdp_client.send.Input.dispatchMouseEvent = AsyncMock()
+    browser_session.cdp_client.send.Input.dispatchKeyEvent = AsyncMock()
     return browser_session
+
+
+@pytest.fixture
+async def started_session(mock_browser_session) -> ScreencastSession:
+    """A ScreencastSession that has already start()ed against
+    mock_browser_session, for dispatch_mouse/dispatch_key tests that only
+    care about behavior once a session is active."""
+    session = ScreencastSession()
+    await session.start(mock_browser_session, MagicMock())
+    return session
 
 
 class TestScreencastStart:
@@ -202,3 +215,187 @@ class TestScreencastStop:
         assert result is False
         assert session.is_active is False
         assert session._current_session_id is None
+
+
+class TestScreencastDispatchMouse:
+    @pytest.mark.asyncio
+    async def test_dispatch_mouse_sends_expected_cdp_params(
+        self, started_session, mock_browser_session
+    ):
+        await started_session.dispatch_mouse(
+            "mousePressed", x=12.5, y=34.0, button="left", click_count=2
+        )
+
+        mock_browser_session.cdp_client.send.Input.dispatchMouseEvent.assert_awaited_once_with(
+            params={
+                "type": "mousePressed",
+                "x": 12.5,
+                "y": 34.0,
+                "button": "left",
+                "clickCount": 2,
+            },
+            session_id="test-session-id",
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_mouse_wheel_includes_deltas(
+        self, started_session, mock_browser_session
+    ):
+        await started_session.dispatch_mouse(
+            "mouseWheel", x=1, y=2, delta_x=10, delta_y=-5
+        )
+
+        mock_browser_session.cdp_client.send.Input.dispatchMouseEvent.assert_awaited_once_with(
+            params={
+                "type": "mouseWheel",
+                "x": 1,
+                "y": 2,
+                "button": "left",
+                "clickCount": 1,
+                "deltaX": 10,
+                "deltaY": -5,
+            },
+            session_id="test-session-id",
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_mouse_routes_through_current_session_id(
+        self, started_session, mock_browser_session
+    ):
+        started_session._current_session_id = "some-other-target"
+
+        await started_session.dispatch_mouse("mouseMoved", x=0, y=0)
+
+        assert (
+            mock_browser_session.cdp_client.send.Input.dispatchMouseEvent.await_args.kwargs[
+                "session_id"
+            ]
+            == "some-other-target"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "cdp_type", ["mousePressed", "mouseReleased", "mouseMoved", "mouseWheel"]
+    )
+    async def test_dispatch_mouse_supports_all_documented_types(
+        self, started_session, mock_browser_session, cdp_type
+    ):
+        await started_session.dispatch_mouse(cdp_type, x=0, y=0)
+
+        mock_browser_session.cdp_client.send.Input.dispatchMouseEvent.assert_awaited_once()
+        assert (
+            mock_browser_session.cdp_client.send.Input.dispatchMouseEvent.await_args.kwargs[
+                "params"
+            ]["type"]
+            == cdp_type
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_mouse_ignores_unsupported_type(
+        self, started_session, mock_browser_session
+    ):
+        await started_session.dispatch_mouse("mouseWheelBogus", x=0, y=0)
+
+        mock_browser_session.cdp_client.send.Input.dispatchMouseEvent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_mouse_noop_when_not_active(self, mock_browser_session):
+        session = ScreencastSession()  # never started
+
+        await session.dispatch_mouse("mousePressed", x=0, y=0)
+
+        mock_browser_session.cdp_client.send.Input.dispatchMouseEvent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_mouse_never_raises_on_cdp_failure(
+        self, started_session, mock_browser_session
+    ):
+        mock_browser_session.cdp_client.send.Input.dispatchMouseEvent = AsyncMock(
+            side_effect=RuntimeError("CDP target crashed")
+        )
+
+        # Must not raise.
+        await started_session.dispatch_mouse("mousePressed", x=0, y=0)
+
+
+class TestScreencastDispatchKey:
+    @pytest.mark.asyncio
+    async def test_dispatch_key_sends_expected_cdp_params(
+        self, started_session, mock_browser_session
+    ):
+        await started_session.dispatch_key("keyDown", key="a", code="KeyA", text="a")
+
+        mock_browser_session.cdp_client.send.Input.dispatchKeyEvent.assert_awaited_once_with(
+            params={"type": "keyDown", "key": "a", "code": "KeyA", "text": "a"},
+            session_id="test-session-id",
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_key_omits_text_when_none(
+        self, started_session, mock_browser_session
+    ):
+        await started_session.dispatch_key("keyUp", key="a", code="KeyA", text=None)
+
+        mock_browser_session.cdp_client.send.Input.dispatchKeyEvent.assert_awaited_once_with(
+            params={"type": "keyUp", "key": "a", "code": "KeyA"},
+            session_id="test-session-id",
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_key_routes_through_current_session_id(
+        self, started_session, mock_browser_session
+    ):
+        started_session._current_session_id = "some-other-target"
+
+        await started_session.dispatch_key("char", key="a", code="KeyA", text="a")
+
+        assert (
+            mock_browser_session.cdp_client.send.Input.dispatchKeyEvent.await_args.kwargs[
+                "session_id"
+            ]
+            == "some-other-target"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cdp_type", ["keyDown", "keyUp", "char"])
+    async def test_dispatch_key_supports_all_documented_types(
+        self, started_session, mock_browser_session, cdp_type
+    ):
+        await started_session.dispatch_key(cdp_type, key="a", code="KeyA", text=None)
+
+        mock_browser_session.cdp_client.send.Input.dispatchKeyEvent.assert_awaited_once()
+        assert (
+            mock_browser_session.cdp_client.send.Input.dispatchKeyEvent.await_args.kwargs[
+                "params"
+            ]["type"]
+            == cdp_type
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_key_ignores_unsupported_type(
+        self, started_session, mock_browser_session
+    ):
+        await started_session.dispatch_key(
+            "rawKeyDown", key="a", code="KeyA", text=None
+        )
+
+        mock_browser_session.cdp_client.send.Input.dispatchKeyEvent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_key_noop_when_not_active(self, mock_browser_session):
+        session = ScreencastSession()  # never started
+
+        await session.dispatch_key("keyDown", key="a", code="KeyA", text=None)
+
+        mock_browser_session.cdp_client.send.Input.dispatchKeyEvent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_key_never_raises_on_cdp_failure(
+        self, started_session, mock_browser_session
+    ):
+        mock_browser_session.cdp_client.send.Input.dispatchKeyEvent = AsyncMock(
+            side_effect=RuntimeError("CDP target crashed")
+        )
+
+        # Must not raise.
+        await started_session.dispatch_key("keyDown", key="a", code="KeyA", text=None)

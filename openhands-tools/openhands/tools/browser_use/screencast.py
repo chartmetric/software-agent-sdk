@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from browser_use.utils import create_task_with_error_handling
 
@@ -25,10 +25,25 @@ from openhands.sdk import get_logger
 
 if TYPE_CHECKING:
     from browser_use.browser.session import BrowserSession
+    from cdp_use.cdp.input.commands import (
+        DispatchKeyEventParameters,
+        DispatchMouseEventParameters,
+    )
     from cdp_use.cdp.page.events import ScreencastFrameEvent
 
 
 logger = get_logger(__name__)
+
+# CDP's own event-type vocabulary for Input.dispatchMouseEvent / dispatchKeyEvent.
+# The WS protocol layer (agent-server sockets.py) maps its wire-level action
+# names ("down"/"up"/"move"/"wheel", "down"/"up"/"char") onto these before
+# calling dispatch_mouse/dispatch_key, so this module only ever speaks CDP's
+# own vocabulary -- consistent with start()/stop() using CDP's own field names
+# directly rather than inventing a parallel one.
+_SUPPORTED_MOUSE_TYPES = frozenset(
+    {"mousePressed", "mouseReleased", "mouseMoved", "mouseWheel"}
+)
+_SUPPORTED_KEY_TYPES = frozenset({"keyDown", "keyUp", "char"})
 
 
 # =============================================================================
@@ -163,6 +178,78 @@ class ScreencastSession:
             return False
         finally:
             self._reset_state()
+
+    async def dispatch_mouse(
+        self,
+        type: str,  # noqa: A002
+        x: float,
+        y: float,
+        button: str = "left",
+        click_count: int = 1,
+        delta_x: float = 0,
+        delta_y: float = 0,
+    ) -> None:
+        """Dispatch a mouse event to the current CDP target for human takeover.
+
+        `type` must be one of the CDP-native mouse event types (mousePressed,
+        mouseReleased, mouseMoved, mouseWheel); anything else is silently
+        ignored. Never raises -- input dispatch is a secondary feature of an
+        active screencast and a failure here must not tear down the session
+        (see module Error Handling Policy).
+        """
+        if not self._is_active or self._browser_session is None:
+            return
+        if type not in _SUPPORTED_MOUSE_TYPES:
+            logger.debug(f"Ignoring unsupported mouse event type: {type}")
+            return
+
+        try:
+            params: dict[str, Any] = {
+                "type": type,
+                "x": x,
+                "y": y,
+                "button": button,
+                "clickCount": click_count,
+            }
+            if type == "mouseWheel":
+                params["deltaX"] = delta_x
+                params["deltaY"] = delta_y
+            await self._browser_session.cdp_client.send.Input.dispatchMouseEvent(
+                params=cast("DispatchMouseEventParameters", params),
+                session_id=self._current_session_id,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to dispatch mouse event: {e}")
+
+    async def dispatch_key(
+        self,
+        type: str,  # noqa: A002
+        key: str,
+        code: str,
+        text: str | None,
+    ) -> None:
+        """Dispatch a keyboard event to the current CDP target for human takeover.
+
+        `type` must be one of the CDP-native key event types (keyDown, keyUp,
+        char); anything else is silently ignored. Never raises -- see
+        dispatch_mouse and the module Error Handling Policy.
+        """
+        if not self._is_active or self._browser_session is None:
+            return
+        if type not in _SUPPORTED_KEY_TYPES:
+            logger.debug(f"Ignoring unsupported key event type: {type}")
+            return
+
+        try:
+            params: dict[str, Any] = {"type": type, "key": key, "code": code}
+            if text is not None:
+                params["text"] = text
+            await self._browser_session.cdp_client.send.Input.dispatchKeyEvent(
+                params=cast("DispatchKeyEventParameters", params),
+                session_id=self._current_session_id,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to dispatch key event: {e}")
 
     def _reset_state(self) -> None:
         self._is_active = False

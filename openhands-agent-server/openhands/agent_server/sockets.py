@@ -501,7 +501,8 @@ async def screencast_socket(
     websocket: WebSocket,
     session_api_key: Annotated[str | None, Query(alias="session_api_key")] = None,
 ):
-    """WebSocket endpoint for a live, read-only view of the agent's browser.
+    """WebSocket endpoint for a live view of the agent's browser, with
+    optional human takeover.
 
     Streams ``{"type": "frame", "data": "<base64 jpeg>", "metadata": {...}}``
     messages captured via CDP `Page.startScreencast` on the shared browser
@@ -510,8 +511,18 @@ async def screencast_socket(
     and its subagents, exactly like `/bash-events`.
 
     The underlying screencast only runs while at least one client is
-    connected (see `ScreencastService`); this is a passive viewer, so no
-    client-to-server payload is expected on this socket.
+    connected (see `ScreencastService`).
+
+    Clients may also send control messages:
+
+    - ``{"type": "take_control"}`` / ``{"type": "release_control"}`` --
+      acquire/release exclusive input control. Only one connected client may
+      hold it at a time; a request from anyone else is ignored.
+    - ``{"type": "mouse", "action": "down"|"up"|"move"|"wheel", "x", "y",
+      "button"?, "clickCount"?, "deltaX"?, "deltaY"?}`` and
+      ``{"type": "key", "action": "down"|"up"|"char", "key", "code",
+      "text"?}`` -- forwarded to the browser via CDP, but only while the
+      sending client holds the control lock; otherwise ignored.
     """
     if not await _accept_authenticated_websocket(websocket, session_api_key):
         return
@@ -532,14 +543,95 @@ async def screencast_socket(
                 data = await websocket.receive_json()
                 if _is_auth_control_message(data):
                     continue
-                # Read-only viewer: anything else received is unexpected and
-                # ignored rather than erroring, to keep the stream resilient.
+                await _handle_screencast_client_message(service, subscriber_id, data)
             except WebSocketDisconnect:
                 logger.info("Screencast websocket disconnected")
                 return
     finally:
         await subscriber.close()
         await service.unsubscribe(subscriber_id)
+
+
+# Wire-level action names (chosen for the frontend's JS event vocabulary) to
+# the CDP-native type strings ScreencastSession.dispatch_mouse/dispatch_key
+# accept. Keeping this mapping at the protocol boundary means the SDK layer
+# only ever has to speak CDP's own vocabulary.
+_MOUSE_ACTION_TO_CDP_TYPE = {
+    "down": "mousePressed",
+    "up": "mouseReleased",
+    "move": "mouseMoved",
+    "wheel": "mouseWheel",
+}
+_KEY_ACTION_TO_CDP_TYPE = {
+    "down": "keyDown",
+    "up": "keyUp",
+    "char": "char",
+}
+
+
+async def _handle_screencast_client_message(
+    service: ScreencastService, subscriber_id: UUID, data: object
+) -> None:
+    """Handle one client-sent screencast message: control-lock requests are
+    always evaluated; mouse/key input is forwarded only if `subscriber_id`
+    currently holds the control lock (enforced again inside
+    `ScreencastService.dispatch_input` as a second line of defense).
+    Malformed or unrecognized messages are silently ignored -- this is a
+    live input stream, not a request/response API with error replies.
+    """
+    if not isinstance(data, dict):
+        return
+    message_type = data.get("type")
+
+    if message_type == "take_control":
+        await service.take_control(subscriber_id)
+        return
+    if message_type == "release_control":
+        await service.release_control(subscriber_id)
+        return
+
+    if message_type == "mouse":
+        action = data.get("action")
+        cdp_type = (
+            _MOUSE_ACTION_TO_CDP_TYPE.get(action) if isinstance(action, str) else None
+        )
+        x, y = data.get("x"), data.get("y")
+        if (
+            cdp_type is None
+            or not isinstance(x, (int, float))
+            or not isinstance(y, (int, float))
+        ):
+            return
+        await service.dispatch_input(
+            subscriber_id,
+            "mouse",
+            {
+                "type": cdp_type,
+                "x": x,
+                "y": y,
+                "button": data.get("button", "left"),
+                "click_count": data.get("clickCount", 1),
+                "delta_x": data.get("deltaX", 0),
+                "delta_y": data.get("deltaY", 0),
+            },
+        )
+    elif message_type == "key":
+        action = data.get("action")
+        cdp_type = (
+            _KEY_ACTION_TO_CDP_TYPE.get(action) if isinstance(action, str) else None
+        )
+        if cdp_type is None:
+            return
+        await service.dispatch_input(
+            subscriber_id,
+            "key",
+            {
+                "type": cdp_type,
+                "key": data.get("key", ""),
+                "code": data.get("code", ""),
+                "text": data.get("text"),
+            },
+        )
 
 
 async def _send_event(event: Event, websocket: WebSocket):

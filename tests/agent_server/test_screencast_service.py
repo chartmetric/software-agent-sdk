@@ -11,6 +11,7 @@ These tests verify that:
 
 import asyncio
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -27,6 +28,8 @@ def _make_executor(start_result: bool = True) -> MagicMock:
     executor = MagicMock()
     executor.start_screencast = MagicMock(return_value=start_result)
     executor.stop_screencast = MagicMock(return_value=True)
+    executor.set_control_owner = MagicMock()
+    executor.dispatch_screencast_input = MagicMock()
     return executor
 
 
@@ -148,3 +151,159 @@ class TestStartFailure:
             await service.subscribe(_FakeSubscriber())
 
             assert service._active is False
+
+
+class TestControlOwnerStateMachine:
+    """agent -> human -> agent, and the authorization rules around it."""
+
+    @pytest.mark.asyncio
+    async def test_default_owner_is_agent(self, patched_shared_executor):
+        service = ScreencastService()
+
+        assert service.control_owner == "agent"
+
+    @pytest.mark.asyncio
+    async def test_human_can_acquire_control(self, patched_shared_executor):
+        service = ScreencastService()
+        viewer = uuid4()
+
+        acquired = await service.take_control(viewer)
+
+        assert acquired is True
+        assert service.control_owner == "human"
+        assert service.is_controller(viewer) is True
+        patched_shared_executor.set_control_owner.assert_called_once_with("human")
+
+    @pytest.mark.asyncio
+    async def test_agent_browser_actions_blocked_while_human_controls(
+        self, patched_shared_executor
+    ):
+        """The actual blocking happens inside BrowserToolExecutor._execute_action
+        (see test_browser_executor.py) by reading `_control_owner`, which this
+        service sets via `executor.set_control_owner`. Verify the propagation
+        this service is responsible for."""
+        service = ScreencastService()
+        viewer = uuid4()
+
+        await service.take_control(viewer)
+
+        patched_shared_executor.set_control_owner.assert_called_once_with("human")
+
+    @pytest.mark.asyncio
+    async def test_second_subscriber_cannot_take_control_from_first(
+        self, patched_shared_executor
+    ):
+        service = ScreencastService()
+        first, second = uuid4(), uuid4()
+        await service.take_control(first)
+        patched_shared_executor.set_control_owner.reset_mock()
+
+        acquired = await service.take_control(second)
+
+        assert acquired is False
+        assert service.is_controller(first) is True
+        assert service.is_controller(second) is False
+        patched_shared_executor.set_control_owner.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_controller_input_is_ignored(self, patched_shared_executor):
+        service = ScreencastService()
+        controller, bystander = uuid4(), uuid4()
+        await service.take_control(controller)
+
+        await service.dispatch_input(bystander, "mouse", {"type": "mouseMoved"})
+
+        patched_shared_executor.dispatch_screencast_input.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_controller_input_is_forwarded(self, patched_shared_executor):
+        service = ScreencastService()
+        controller = uuid4()
+        await service.take_control(controller)
+
+        payload = {"type": "mouseMoved", "x": 1, "y": 2}
+        await service.dispatch_input(controller, "mouse", payload)
+
+        patched_shared_executor.dispatch_screencast_input.assert_called_once_with(
+            "mouse", payload
+        )
+
+    @pytest.mark.asyncio
+    async def test_input_before_taking_control_is_ignored(
+        self, patched_shared_executor
+    ):
+        service = ScreencastService()
+        viewer = uuid4()
+
+        await service.dispatch_input(viewer, "mouse", {"type": "mouseMoved"})
+
+        patched_shared_executor.dispatch_screencast_input.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_release_by_non_controller_is_ignored(self, patched_shared_executor):
+        service = ScreencastService()
+        controller, bystander = uuid4(), uuid4()
+        await service.take_control(controller)
+
+        released = await service.release_control(bystander)
+
+        assert released is False
+        assert service.control_owner == "human"
+        assert service.is_controller(controller) is True
+
+    @pytest.mark.asyncio
+    async def test_releasing_control_restores_agent_access(
+        self, patched_shared_executor
+    ):
+        service = ScreencastService()
+        viewer = uuid4()
+        await service.take_control(viewer)
+        patched_shared_executor.set_control_owner.reset_mock()
+
+        released = await service.release_control(viewer)
+
+        assert released is True
+        assert service.control_owner == "agent"
+        assert service.is_controller(viewer) is False
+        patched_shared_executor.set_control_owner.assert_called_once_with("agent")
+
+    @pytest.mark.asyncio
+    async def test_input_ignored_after_release(self, patched_shared_executor):
+        service = ScreencastService()
+        viewer = uuid4()
+        await service.take_control(viewer)
+        await service.release_control(viewer)
+
+        await service.dispatch_input(viewer, "mouse", {"type": "mouseMoved"})
+
+        patched_shared_executor.dispatch_screencast_input.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disconnecting_controller_releases_control(
+        self, patched_shared_executor
+    ):
+        """A dropped connection must never leave the browser permanently
+        locked to a human who is no longer there."""
+        service = ScreencastService()
+        sub_id = await service.subscribe(_FakeSubscriber())
+        await service.take_control(sub_id)
+        assert service.control_owner == "human"
+
+        await service.unsubscribe(sub_id)
+
+        assert service.control_owner == "agent"
+        assert service.is_controller(sub_id) is False
+
+    @pytest.mark.asyncio
+    async def test_disconnecting_non_controller_does_not_release_control(
+        self, patched_shared_executor
+    ):
+        service = ScreencastService()
+        controller = uuid4()
+        bystander_sub_id = await service.subscribe(_FakeSubscriber())
+        await service.take_control(controller)
+
+        await service.unsubscribe(bystander_sub_id)
+
+        assert service.control_owner == "human"
+        assert service.is_controller(controller) is True
