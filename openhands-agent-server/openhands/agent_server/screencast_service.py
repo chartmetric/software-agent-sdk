@@ -157,7 +157,20 @@ class ScreencastService:
                 )
                 future.add_done_callback(_log_publish_failure)
 
-            started = await asyncio.to_thread(executor.start_screencast, _on_frame)
+            def _on_cursor(cursor: dict[str, Any]) -> None:
+                # Every mouse event dispatched through the browser's CDP
+                # client (agent tool actions and human takeover alike), so
+                # viewers can overlay a live cursor on frames that contain
+                # none. Same thread-hop as _on_frame.
+                future = asyncio.run_coroutine_threadsafe(
+                    self._pub_sub({"type": "cursor", **cursor}),
+                    loop,
+                )
+                future.add_done_callback(_log_publish_failure)
+
+            started = await asyncio.to_thread(
+                executor.start_screencast, _on_frame, on_cursor=_on_cursor
+            )
             self._active = bool(started)
             if not self._active:
                 logger.warning("Screencast failed to start")

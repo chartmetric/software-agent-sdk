@@ -7,6 +7,7 @@ mocked WebSocket rather than through a real handshake, since auth
 are already covered generically for the sibling `/bash-events` route.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -109,3 +110,240 @@ class TestScreencastSocketRoute:
 
         per_app_service.subscribe.assert_called_once()
         per_app_service.unsubscribe.assert_called_once()
+
+
+class TestScreencastSubscriberQueue:
+    @pytest.mark.asyncio
+    async def test_stale_frames_are_skipped_without_evicting_cursor_updates(self):
+        """The per-type latest-wins queue: while the sender is blocked on a
+        slow client, newer frames replace the pending frame, but a pending
+        cursor update survives the frame churn (and vice versa)."""
+        from openhands.agent_server.sockets import _ScreencastWebSocketSubscriber
+
+        ws = _make_ws()
+        gate = asyncio.Event()
+        sent: list[dict] = []
+
+        async def _slow_send(message: dict) -> None:
+            sent.append(message)
+            await gate.wait()
+
+        ws.send_json = AsyncMock(side_effect=_slow_send)
+        subscriber = _ScreencastWebSocketSubscriber(ws)
+        try:
+            frame_old = {"type": "frame", "data": "first", "metadata": {}}
+            frame_stale = {"type": "frame", "data": "stale", "metadata": {}}
+            cursor = {"type": "cursor", "x": 1, "y": 2, "event": "mousePressed"}
+            frame_new = {"type": "frame", "data": "newest", "metadata": {}}
+
+            await subscriber(frame_old)
+            # Let the sender task pick up frame_old and block inside send_json.
+            for _ in range(3):
+                await asyncio.sleep(0)
+
+            await subscriber(frame_stale)
+            await subscriber(cursor)
+            await subscriber(frame_new)  # replaces frame_stale, not the cursor
+
+            gate.set()
+            for _ in range(10):
+                if len(sent) >= 3:
+                    break
+                await asyncio.sleep(0.01)
+
+            assert sent == [frame_old, frame_new, cursor]
+        finally:
+            await subscriber.close()
+
+
+def _make_gated_dispatch_service():
+    """A service whose dispatch_input records calls and blocks on a gate,
+    letting tests hold the pump's worker mid-dispatch deterministically."""
+    service = MagicMock(spec=ScreencastService)
+    gate = asyncio.Event()
+    calls: list[tuple[str, dict]] = []
+
+    async def _dispatch(subscriber_id, kind, payload):
+        calls.append((kind, payload))
+        await gate.wait()
+
+    service.dispatch_input = AsyncMock(side_effect=_dispatch)
+    return service, gate, calls
+
+
+async def _wait_until(predicate, attempts: int = 100) -> None:
+    for _ in range(attempts):
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+
+
+class TestScreencastInputPump:
+    @pytest.mark.asyncio
+    async def test_pending_moves_coalesce_to_the_latest_position(self):
+        from openhands.agent_server.sockets import _ScreencastInputPump
+
+        service, gate, calls = _make_gated_dispatch_service()
+        pump = _ScreencastInputPump(service, uuid4())
+        try:
+            pump.enqueue("mouse", {"type": "mouseMoved", "x": 1, "y": 1})
+            await _wait_until(lambda: len(calls) == 1)
+
+            # Queued behind the blocked dispatch: only the newest move survives.
+            pump.enqueue("mouse", {"type": "mouseMoved", "x": 2, "y": 2})
+            pump.enqueue("mouse", {"type": "mouseMoved", "x": 3, "y": 3})
+
+            gate.set()
+            await _wait_until(lambda: len(calls) == 2)
+
+            assert [(kind, p["x"], p["y"]) for kind, p in calls] == [
+                ("mouse", 1, 1),
+                ("mouse", 3, 3),
+            ]
+        finally:
+            await pump.close()
+
+    @pytest.mark.asyncio
+    async def test_pending_wheels_merge_their_deltas(self):
+        from openhands.agent_server.sockets import _ScreencastInputPump
+
+        service, gate, calls = _make_gated_dispatch_service()
+        pump = _ScreencastInputPump(service, uuid4())
+        try:
+            pump.enqueue("mouse", {"type": "mouseWheel", "x": 1, "y": 1, "delta_y": 1})
+            await _wait_until(lambda: len(calls) == 1)
+
+            pump.enqueue("mouse", {"type": "mouseWheel", "x": 2, "y": 2, "delta_y": 2})
+            pump.enqueue("mouse", {"type": "mouseWheel", "x": 3, "y": 3, "delta_y": 3})
+
+            gate.set()
+            await _wait_until(lambda: len(calls) == 2)
+
+            merged = calls[1][1]
+            assert (merged["x"], merged["y"], merged["delta_y"]) == (3, 3, 5)
+        finally:
+            await pump.close()
+
+    @pytest.mark.asyncio
+    async def test_presses_are_never_coalesced_and_order_is_preserved(self):
+        from openhands.agent_server.sockets import _ScreencastInputPump
+
+        service, gate, calls = _make_gated_dispatch_service()
+        pump = _ScreencastInputPump(service, uuid4())
+        try:
+            pump.enqueue("mouse", {"type": "mouseMoved", "x": 1, "y": 1})
+            await _wait_until(lambda: len(calls) == 1)
+
+            pump.enqueue("mouse", {"type": "mouseMoved", "x": 2, "y": 2})
+            pump.enqueue("mouse", {"type": "mousePressed", "x": 2, "y": 2})
+            pump.enqueue("mouse", {"type": "mouseMoved", "x": 3, "y": 3})
+
+            gate.set()
+            await _wait_until(lambda: len(calls) == 4)
+
+            assert [p["type"] for _, p in calls] == [
+                "mouseMoved",
+                "mouseMoved",
+                "mousePressed",
+                "mouseMoved",
+            ]
+        finally:
+            await pump.close()
+
+    @pytest.mark.asyncio
+    async def test_route_forwards_input_through_the_pump(self):
+        service = MagicMock(spec=ScreencastService)
+        service.subscribe = AsyncMock(return_value=uuid4())
+        service.unsubscribe = AsyncMock()
+        dispatched: list[tuple[str, dict]] = []
+
+        async def _dispatch(subscriber_id, kind, payload):
+            dispatched.append((kind, payload))
+
+        service.dispatch_input = AsyncMock(side_effect=_dispatch)
+
+        ws = _make_ws({"screencast_service": service})
+        receive_count = {"n": 0}
+
+        async def _receive():
+            receive_count["n"] += 1
+            if receive_count["n"] == 1:
+                return {
+                    "type": "mouse",
+                    "action": "down",
+                    "x": 5,
+                    "y": 6,
+                }
+            # Keep the connection open until the pump has drained the input,
+            # then disconnect.
+            await _wait_until(lambda: dispatched)
+            raise WebSocketDisconnect()
+
+        ws.receive_json = AsyncMock(side_effect=_receive)
+
+        await screencast_socket(ws, session_api_key=None)
+
+        assert len(dispatched) == 1
+        kind, payload = dispatched[0]
+        assert kind == "mouse"
+        assert (payload["type"], payload["x"], payload["y"]) == (
+            "mousePressed",
+            5,
+            6,
+        )
+
+
+class TestBinaryFrameDelivery:
+    @pytest.mark.asyncio
+    async def test_opted_in_viewer_receives_framed_bytes(self):
+        import base64
+        import json
+
+        from openhands.agent_server.sockets import _ScreencastWebSocketSubscriber
+
+        ws = _make_ws()
+        ws.send_bytes = AsyncMock()
+        subscriber = _ScreencastWebSocketSubscriber(ws)
+        try:
+            subscriber.set_binary_frames(True)
+            jpeg = b"\xff\xd8jpeg-bytes"
+            metadata = {"deviceWidth": 1280, "deviceHeight": 800}
+            await subscriber(
+                {
+                    "type": "frame",
+                    "data": base64.b64encode(jpeg).decode("ascii"),
+                    "metadata": metadata,
+                }
+            )
+            await _wait_until(lambda: ws.send_bytes.await_count == 1)
+
+            payload = ws.send_bytes.await_args.args[0]
+            metadata_len = int.from_bytes(payload[:4], "big")
+            assert json.loads(payload[4 : 4 + metadata_len]) == metadata
+            assert payload[4 + metadata_len :] == jpeg
+            ws.send_json.assert_not_awaited()
+
+            # Non-frame messages stay JSON text even when opted in.
+            cursor = {"type": "cursor", "x": 1, "y": 2, "event": "mousePressed"}
+            await subscriber(cursor)
+            await _wait_until(lambda: ws.send_json.await_count == 1)
+            ws.send_json.assert_awaited_once_with(cursor)
+        finally:
+            await subscriber.close()
+
+    @pytest.mark.asyncio
+    async def test_default_delivery_remains_json(self):
+        from openhands.agent_server.sockets import _ScreencastWebSocketSubscriber
+
+        ws = _make_ws()
+        ws.send_bytes = AsyncMock()
+        subscriber = _ScreencastWebSocketSubscriber(ws)
+        try:
+            frame = {"type": "frame", "data": "AAAA", "metadata": {}}
+            await subscriber(frame)
+            await _wait_until(lambda: ws.send_json.await_count == 1)
+
+            ws.send_json.assert_awaited_once_with(frame)
+            ws.send_bytes.assert_not_awaited()
+        finally:
+            await subscriber.close()

@@ -399,3 +399,82 @@ class TestScreencastDispatchKey:
 
         # Must not raise.
         await started_session.dispatch_key("keyDown", key="a", code="KeyA", text=None)
+
+
+class TestScreencastCursorReporting:
+    """Cursor reporting: with `on_cursor` supplied, every mouse event
+    dispatched through the root CDP client is forwarded unchanged and its
+    position reported; stop() restores the original dispatch method."""
+
+    @pytest.mark.asyncio
+    async def test_dispatched_mouse_event_is_forwarded_and_reported(
+        self, mock_browser_session
+    ):
+        original = mock_browser_session.cdp_client.send.Input.dispatchMouseEvent
+        cursor_events: list[dict[str, Any]] = []
+        session = ScreencastSession()
+        assert await session.start(
+            mock_browser_session, MagicMock(), on_cursor=cursor_events.append
+        )
+
+        wrapped = mock_browser_session.cdp_client.send.Input.dispatchMouseEvent
+        assert wrapped is not original
+        params = {"type": "mousePressed", "x": 10.0, "y": 20.0, "button": "left"}
+        await wrapped(params, session_id="s1")
+
+        original.assert_awaited_once_with(params, session_id="s1")
+        assert cursor_events == [{"x": 10.0, "y": 20.0, "event": "mousePressed"}]
+
+    @pytest.mark.asyncio
+    async def test_stop_restores_original_dispatch_method(self, mock_browser_session):
+        original = mock_browser_session.cdp_client.send.Input.dispatchMouseEvent
+        session = ScreencastSession()
+        await session.start(mock_browser_session, MagicMock(), on_cursor=MagicMock())
+
+        await session.stop()
+
+        assert mock_browser_session.cdp_client.send.Input.dispatchMouseEvent is original
+
+    @pytest.mark.asyncio
+    async def test_without_on_cursor_dispatch_method_is_untouched(
+        self, mock_browser_session
+    ):
+        original = mock_browser_session.cdp_client.send.Input.dispatchMouseEvent
+        session = ScreencastSession()
+        await session.start(mock_browser_session, MagicMock())
+
+        assert mock_browser_session.cdp_client.send.Input.dispatchMouseEvent is original
+
+    @pytest.mark.asyncio
+    async def test_cursor_callback_failure_does_not_break_dispatch(
+        self, mock_browser_session
+    ):
+        original = mock_browser_session.cdp_client.send.Input.dispatchMouseEvent
+        session = ScreencastSession()
+        await session.start(
+            mock_browser_session,
+            MagicMock(),
+            on_cursor=MagicMock(side_effect=RuntimeError("viewer went away")),
+        )
+
+        wrapped = mock_browser_session.cdp_client.send.Input.dispatchMouseEvent
+        # Must not raise, and must still forward to the original.
+        await wrapped({"type": "mouseMoved", "x": 1, "y": 2})
+
+        original.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_malformed_or_unsupported_events_are_not_reported(
+        self, mock_browser_session
+    ):
+        cursor_events: list[dict[str, Any]] = []
+        session = ScreencastSession()
+        await session.start(
+            mock_browser_session, MagicMock(), on_cursor=cursor_events.append
+        )
+
+        wrapped = mock_browser_session.cdp_client.send.Input.dispatchMouseEvent
+        await wrapped({"type": "unsupportedType", "x": 1, "y": 2})
+        await wrapped({"type": "mousePressed", "x": "not-a-number", "y": 2})
+
+        assert cursor_events == []

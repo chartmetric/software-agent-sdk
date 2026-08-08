@@ -13,11 +13,13 @@ authentication.  Three auth methods are supported (highest to lowest precedence)
 """
 
 import asyncio
+import base64
 import json
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import (
@@ -510,6 +512,13 @@ async def screencast_socket(
     session is a process-wide singleton shared across the whole conversation
     and its subagents, exactly like `/bash-events`.
 
+    Also streams ``{"type": "cursor", "x": <float>, "y": <float>,
+    "event": "<CDP mouse type>"}`` messages (CDP viewport coordinates)
+    whenever a mouse event is dispatched to the shared browser — the agent's
+    own tool-driven clicks as well as human-takeover input — so clients can
+    overlay a live cursor on frames that, being page-render captures,
+    contain no cursor of their own.
+
     The underlying screencast only runs while at least one client is
     connected (see `ScreencastService`).
 
@@ -523,6 +532,12 @@ async def screencast_socket(
       ``{"type": "key", "action": "down"|"up"|"char", "key", "code",
       "text"?}`` -- forwarded to the browser via CDP, but only while the
       sending client holds the control lock; otherwise ignored.
+    - ``{"type": "frame_format", "format": "binary"}`` -- opt in to binary
+      frame delivery: each frame arrives as one binary WebSocket message of
+      ``[4-byte big-endian metadata length][metadata JSON][raw JPEG bytes]``
+      instead of a base64-in-JSON text message, cutting both the ~33%%
+      base64 overhead and the JSON parse of megabyte strings. Cursor and
+      other messages remain JSON text.
     """
     if not await _accept_authenticated_websocket(websocket, session_api_key):
         return
@@ -537,17 +552,21 @@ async def screencast_socket(
         await websocket.close(code=1013, reason="Too many screencast viewers")
         return
 
+    input_pump = _ScreencastInputPump(service, subscriber_id)
     try:
         while True:
             try:
                 data = await websocket.receive_json()
                 if _is_auth_control_message(data):
                     continue
-                await _handle_screencast_client_message(service, subscriber_id, data)
+                await _handle_screencast_client_message(
+                    service, subscriber_id, data, subscriber, input_pump
+                )
             except WebSocketDisconnect:
                 logger.info("Screencast websocket disconnected")
                 return
     finally:
+        await input_pump.close()
         await subscriber.close()
         await service.unsubscribe(subscriber_id)
 
@@ -570,12 +589,18 @@ _KEY_ACTION_TO_CDP_TYPE = {
 
 
 async def _handle_screencast_client_message(
-    service: ScreencastService, subscriber_id: UUID, data: object
+    service: ScreencastService,
+    subscriber_id: UUID,
+    data: object,
+    subscriber: "_ScreencastWebSocketSubscriber",
+    input_pump: "_ScreencastInputPump",
 ) -> None:
     """Handle one client-sent screencast message: control-lock requests are
     always evaluated; mouse/key input is forwarded only if `subscriber_id`
     currently holds the control lock (enforced again inside
-    `ScreencastService.dispatch_input` as a second line of defense).
+    `ScreencastService.dispatch_input` as a second line of defense). Input
+    events are handed to `input_pump` rather than dispatched inline, so the
+    caller's receive loop never blocks behind a CDP round trip.
     Malformed or unrecognized messages are silently ignored -- this is a
     live input stream, not a request/response API with error replies.
     """
@@ -588,6 +613,9 @@ async def _handle_screencast_client_message(
         return
     if message_type == "release_control":
         await service.release_control(subscriber_id)
+        return
+    if message_type == "frame_format":
+        subscriber.set_binary_frames(data.get("format") == "binary")
         return
 
     if message_type == "mouse":
@@ -602,8 +630,7 @@ async def _handle_screencast_client_message(
             or not isinstance(y, (int, float))
         ):
             return
-        await service.dispatch_input(
-            subscriber_id,
+        input_pump.enqueue(
             "mouse",
             {
                 "type": cdp_type,
@@ -622,8 +649,7 @@ async def _handle_screencast_client_message(
         )
         if cdp_type is None:
             return
-        await service.dispatch_input(
-            subscriber_id,
+        input_pump.enqueue(
             "key",
             {
                 "type": cdp_type,
@@ -632,6 +658,84 @@ async def _handle_screencast_client_message(
                 "text": data.get("text"),
             },
         )
+
+
+# Backstop for a client that floods input faster than CDP can drain it even
+# after coalescing (the frontend already coalesces moves/wheels client-side);
+# beyond this the oldest pending event is dropped rather than growing the
+# queue without bound.
+_INPUT_PUMP_MAX_PENDING = 64
+
+
+@dataclass
+class _ScreencastInputPump:
+    """Decouples the screencast receive loop from CDP input dispatch.
+
+    Each forwarded input event costs a thread hop onto the browser's loop
+    plus a full CDP round trip; a human dragging the mouse produces events
+    faster than that pipeline drains them one at a time, and awaiting each
+    dispatch inline would back the WebSocket receive loop up behind the
+    slowest round trip. Events are queued here and drained by a single
+    worker task instead — order-preserving, except that a queued-but-not-
+    yet-dispatched mouse move is replaced by a newer one (only the latest
+    position matters) and consecutive queued wheel events merge their
+    deltas (scroll distance is additive).
+    """
+
+    service: ScreencastService
+    subscriber_id: UUID
+    _pending: deque = field(default_factory=deque)
+    _wakeup: asyncio.Event = field(default_factory=asyncio.Event)
+    _worker_task: asyncio.Task | None = field(default=None)
+
+    def __post_init__(self) -> None:
+        self._worker_task = asyncio.create_task(self._drain_loop())
+
+    def enqueue(self, kind: str, payload: dict[str, Any]) -> None:
+        if self._pending:
+            last_kind, last_payload = self._pending[-1]
+            if kind == "mouse" and last_kind == "mouse":
+                cdp_type = payload.get("type")
+                if cdp_type == "mouseMoved" == last_payload.get("type"):
+                    self._pending[-1] = (kind, payload)
+                    self._wakeup.set()
+                    return
+                if cdp_type == "mouseWheel" == last_payload.get("type"):
+                    merged = {
+                        **payload,
+                        "delta_x": last_payload.get("delta_x", 0)
+                        + payload.get("delta_x", 0),
+                        "delta_y": last_payload.get("delta_y", 0)
+                        + payload.get("delta_y", 0),
+                    }
+                    self._pending[-1] = (kind, merged)
+                    self._wakeup.set()
+                    return
+        if len(self._pending) >= _INPUT_PUMP_MAX_PENDING:
+            self._pending.popleft()
+        self._pending.append((kind, payload))
+        self._wakeup.set()
+
+    async def _drain_loop(self) -> None:
+        while True:
+            await self._wakeup.wait()
+            self._wakeup.clear()
+            while self._pending:
+                kind, payload = self._pending.popleft()
+                try:
+                    await self.service.dispatch_input(self.subscriber_id, kind, payload)
+                except Exception:
+                    logger.exception("error_dispatching_screencast_input")
+
+    async def close(self) -> None:
+        task = self._worker_task
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._worker_task = None
 
 
 async def _send_event(event: Event, websocket: WebSocket):
@@ -748,41 +852,61 @@ class _BashWebSocketSubscriber(Subscriber[BashEventBase]):
 
 @dataclass
 class _ScreencastWebSocketSubscriber(Subscriber[dict]):
-    """WebSocket subscriber for live screencast frames.
+    """WebSocket subscriber for live screencast frames and cursor updates.
 
-    A live view frame is stale the instant a newer one exists, so this
-    subscriber keeps only the single freshest pending frame (dropping an
-    older queued one rather than growing the queue) and drains it on a
-    dedicated sender task — a slow client falls behind by skipping frames,
-    never by blocking screencast publication for every other viewer.
+    A live view message is stale the instant a newer one of the same type
+    exists, so this subscriber keeps only the single freshest pending
+    message *per message type* — a burst of frames collapses to the latest
+    frame without ever evicting a pending cursor update, and vice versa —
+    and drains them on a dedicated sender task. A slow client falls behind
+    by skipping stale messages, never by blocking screencast publication
+    for every other viewer.
     """
 
     websocket: WebSocket
-    _queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=1))
+    _pending: dict[str, dict] = field(default_factory=dict)
+    _wakeup: asyncio.Event = field(default_factory=asyncio.Event)
     _sender_task: asyncio.Task | None = field(default=None)
+    _binary_frames: bool = field(default=False)
 
     def __post_init__(self) -> None:
         self._sender_task = asyncio.create_task(self._send_loop())
 
+    def set_binary_frames(self, enabled: bool) -> None:
+        """Opt this viewer in/out of binary frame delivery (see the
+        `/screencast` route docstring for the wire format)."""
+        self._binary_frames = enabled
+
     async def __call__(self, message: dict) -> None:
-        if self._queue.full():
-            try:
-                self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-        await self._queue.put(message)
+        kind = message.get("type") if isinstance(message, dict) else None
+        self._pending[kind if isinstance(kind, str) else ""] = message
+        self._wakeup.set()
 
     async def _send_loop(self) -> None:
         while True:
-            message = await self._queue.get()
-            if not _is_websocket_connected(self.websocket):
-                continue
-            try:
-                await self.websocket.send_json(message)
-            except (RuntimeError, WebSocketDisconnect) as e:
-                logger.debug(f"error_sending_screencast_frame_disconnected: {e}")
-            except Exception:
-                logger.exception("error_sending_screencast_frame", stack_info=True)
+            await self._wakeup.wait()
+            self._wakeup.clear()
+            while self._pending:
+                kind = next(iter(self._pending))
+                message = self._pending.pop(kind)
+                if not _is_websocket_connected(self.websocket):
+                    continue
+                try:
+                    await self._send_message(kind, message)
+                except (RuntimeError, WebSocketDisconnect) as e:
+                    logger.debug(f"error_sending_screencast_frame_disconnected: {e}")
+                except Exception:
+                    logger.exception("error_sending_screencast_frame", stack_info=True)
+
+    async def _send_message(self, kind: str, message: dict) -> None:
+        if kind != "frame" or not self._binary_frames:
+            await self.websocket.send_json(message)
+            return
+        metadata_bytes = json.dumps(message.get("metadata", {})).encode("utf-8")
+        jpeg_bytes = base64.b64decode(message.get("data", ""))
+        await self.websocket.send_bytes(
+            len(metadata_bytes).to_bytes(4, "big") + metadata_bytes + jpeg_bytes
+        )
 
     async def close(self) -> None:
         if self._sender_task is not None:

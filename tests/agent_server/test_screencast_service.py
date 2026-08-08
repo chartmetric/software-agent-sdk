@@ -307,3 +307,36 @@ class TestControlOwnerStateMachine:
 
         assert service.control_owner == "human"
         assert service.is_controller(controller) is True
+
+
+class TestCursorPublication:
+    @pytest.mark.asyncio
+    async def test_cursor_events_are_published_to_subscribers(
+        self, patched_shared_executor
+    ):
+        received: list[dict] = []
+
+        class _Recorder(Subscriber[dict]):
+            async def __call__(self, message: dict) -> None:
+                received.append(message)
+
+        service = ScreencastService()
+        await service.subscribe(_Recorder())
+
+        # start_screencast must be wired with an on_cursor callback...
+        _, kwargs = patched_shared_executor.start_screencast.call_args
+        on_cursor = kwargs["on_cursor"]
+
+        # ...which, invoked from the browser's background thread, publishes a
+        # typed cursor message onto the service's pub/sub.
+        await asyncio.to_thread(
+            on_cursor, {"x": 10.0, "y": 20.0, "event": "mousePressed"}
+        )
+        for _ in range(10):
+            if received:
+                break
+            await asyncio.sleep(0.01)
+
+        assert received == [
+            {"type": "cursor", "x": 10.0, "y": 20.0, "event": "mousePressed"}
+        ]
