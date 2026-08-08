@@ -125,6 +125,170 @@ def test_sandbox_service_ports_are_reserved_from_discovery():
         assert port in served_app_service.RESERVED_PORTS
 
 
+@pytest.mark.asyncio
+async def test_the_browsers_devtools_listener_is_not_a_served_app(monkeypatch):
+    """The agent's Chromium debugger answers text/html, but it is not an app.
+
+    Treating it as one handed it a public worker, displaced the repository
+    preview from its slot, and mirrored the agent's own browser to whoever
+    opened that worker in the App panel.
+    """
+    monkeypatch.setattr(served_app_service, "_listening_ports", lambda: {3000, 39001})
+
+    async def probe(port: int):
+        return _DiscoveredApp(port=port, kind="web")
+
+    async def probe_devtools(port: int):
+        return port == 39001
+
+    async def start_server(handler, host, port):
+        return _FakeServer()
+
+    monkeypatch.setattr(served_app_service, "_probe_http", probe)
+    monkeypatch.setattr(served_app_service, "_probe_devtools", probe_devtools)
+    monkeypatch.setattr(asyncio, "start_server", start_server)
+    service = ServedAppService()
+
+    await service._reconcile()
+
+    assert [(app.name, app.port) for app in service.list_apps()] == [("Web App", 3000)]
+
+
+@pytest.mark.asyncio
+async def test_an_unconfirmed_devtools_probe_is_not_cached_as_a_verdict(monkeypatch):
+    """A timed-out confirmation says nothing; the next cycle must re-ask.
+
+    Caching it as "not the debugger" would offer the mirror forever after one
+    busy moment; caching it as "the debugger" would hide a real app forever.
+    """
+    monkeypatch.setattr(served_app_service, "_listening_ports", lambda: {39001})
+
+    async def probe(port: int):
+        return _DiscoveredApp(port=port, kind="web")
+
+    verdicts = iter([None, True])
+
+    async def probe_devtools(port: int):
+        return next(verdicts)
+
+    async def start_server(handler, host, port):
+        return _FakeServer()
+
+    monkeypatch.setattr(served_app_service, "_probe_http", probe)
+    monkeypatch.setattr(served_app_service, "_probe_devtools", probe_devtools)
+    monkeypatch.setattr(asyncio, "start_server", start_server)
+    service = ServedAppService()
+
+    await service._reconcile()
+    assert [app.port for app in service.list_apps()] == [39001]
+
+    await service._reconcile()
+    assert service.list_apps() == []
+
+
+@pytest.mark.asyncio
+async def test_an_app_keeps_its_worker_when_another_listener_appears(monkeypatch):
+    """Worker assignments must not reshuffle because discovery found one more.
+
+    Rebuilding the mapping from scratch every cycle moved the same application
+    between public worker URLs whenever a listener appeared or vanished, so the
+    App panel's address changed and the preview reloaded mid-conversation.
+    """
+    listeners = {3000}
+    monkeypatch.setattr(served_app_service, "_listening_ports", lambda: set(listeners))
+
+    async def probe(port: int):
+        return _DiscoveredApp(port=port, kind="web")
+
+    async def probe_devtools(port: int):
+        return False
+
+    async def start_server(handler, host, port):
+        return _FakeServer()
+
+    monkeypatch.setattr(served_app_service, "_probe_http", probe)
+    monkeypatch.setattr(served_app_service, "_probe_devtools", probe_devtools)
+    monkeypatch.setattr(asyncio, "start_server", start_server)
+    service = ServedAppService()
+
+    await service._reconcile()
+    assert service._targets == {8011: 3000}
+
+    # A second listener sorts ahead of the first by port; the first still
+    # keeps its worker and the newcomer takes the free one.
+    listeners.add(2999)
+    await service._reconcile()
+
+    assert service._targets == {8011: 3000, 8012: 2999}
+
+
+@pytest.mark.asyncio
+async def test_a_silent_but_listening_app_survives_a_few_probe_misses(monkeypatch):
+    """A dev server stalled past the probe timeout is busy, not gone.
+
+    Dropping it on one missed probe tore down its relay and blanked the App
+    panel every time the repository compiled; only an app that stays silent for
+    several cycles -- or stops listening -- is really gone.
+    """
+    monkeypatch.setattr(served_app_service, "_listening_ports", lambda: {3000})
+
+    answers = iter([_DiscoveredApp(port=3000, kind="web"), None, None, None])
+
+    async def probe(port: int):
+        return next(answers)
+
+    async def probe_devtools(port: int):
+        return False
+
+    async def start_server(handler, host, port):
+        return _FakeServer()
+
+    monkeypatch.setattr(served_app_service, "_probe_http", probe)
+    monkeypatch.setattr(served_app_service, "_probe_devtools", probe_devtools)
+    monkeypatch.setattr(asyncio, "start_server", start_server)
+    service = ServedAppService()
+
+    await service._reconcile()
+    assert [app.port for app in service.list_apps()] == [3000]
+
+    # Two consecutive misses keep the app; the third drops it.
+    await service._reconcile()
+    assert [app.port for app in service.list_apps()] == [3000]
+    await service._reconcile()
+    assert [app.port for app in service.list_apps()] == [3000]
+    await service._reconcile()
+    assert service.list_apps() == []
+
+
+@pytest.mark.asyncio
+async def test_a_port_that_stops_listening_is_dropped_immediately(monkeypatch):
+    """Probe-miss tolerance is for silence, not for a closed port."""
+    listeners = {3000}
+    monkeypatch.setattr(served_app_service, "_listening_ports", lambda: set(listeners))
+
+    async def probe(port: int):
+        return _DiscoveredApp(port=port, kind="web")
+
+    async def probe_devtools(port: int):
+        return False
+
+    async def start_server(handler, host, port):
+        return _FakeServer()
+
+    monkeypatch.setattr(served_app_service, "_probe_http", probe)
+    monkeypatch.setattr(served_app_service, "_probe_devtools", probe_devtools)
+    monkeypatch.setattr(asyncio, "start_server", start_server)
+    service = ServedAppService()
+
+    await service._reconcile()
+    assert [app.port for app in service.list_apps()] == [3000]
+
+    listeners.clear()
+    await service._reconcile()
+
+    assert service.list_apps() == []
+
+
 def test_an_app_on_a_worker_port_keeps_it_and_the_next_app_takes_the_other(
     monkeypatch,
 ):
