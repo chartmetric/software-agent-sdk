@@ -21,6 +21,9 @@ from typing import (
     overload,
 )
 
+from openhands.sdk.agent.browser_context_pruning import (
+    prune_stale_browser_observations,
+)
 from openhands.sdk.context.condenser.base import CondenserBase
 from openhands.sdk.context.view import View
 from openhands.sdk.conversation.types import ConversationTokenCallbackType
@@ -593,6 +596,10 @@ def prepare_llm_messages(
     # Convert events to messages
     messages = LLMConvertibleEvent.events_to_messages(llm_convertible_events)
 
+    # Superseded browser snapshots dominate context growth; rewrite the stale
+    # ones (never the most recent) before sending. See browser_context_pruning.
+    messages = prune_stale_browser_observations(messages)
+
     # Add any additional messages (e.g., user question for ask_agent)
     if additional_messages:
         messages.extend(additional_messages)
@@ -679,6 +686,8 @@ async def aprepare_llm_messages(
                 return condensation_result
 
     messages = LLMConvertibleEvent.events_to_messages(llm_convertible_events)
+
+    messages = prune_stale_browser_observations(messages)
 
     if additional_messages:
         messages.extend(additional_messages)
