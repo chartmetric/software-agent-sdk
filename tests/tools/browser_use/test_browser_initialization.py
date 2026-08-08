@@ -288,3 +288,88 @@ class TestBrowserWarmUp:
 
         executor._ensure_initialized.assert_awaited_once()
         executor.cleanup.assert_awaited_once()
+
+
+class TestInitialStorageState:
+    """Pre-seeded storage state is applied into a fresh session (Path B)."""
+
+    def _executor(self):
+        from unittest.mock import MagicMock, patch
+
+        with (
+            patch.object(
+                BrowserToolExecutor,
+                "_ensure_chromium_available",
+                return_value="/usr/bin/chromium",
+            ),
+            patch(
+                "openhands.tools.browser_use.impl.CustomBrowserUseServer",
+                return_value=MagicMock(),
+            ),
+            patch("openhands.tools.browser_use.impl.run_with_timeout"),
+        ):
+            return BrowserToolExecutor()
+
+    @pytest.mark.asyncio
+    async def test_applies_storage_state_from_env_file(self, tmp_path, monkeypatch):
+        import json
+        from unittest.mock import AsyncMock
+
+        from openhands.tools.browser_use.impl import _INITIAL_STORAGE_STATE_ENV_VAR
+
+        state = {"cookies": [{"name": "session", "value": "x"}], "origins": []}
+        state_file = tmp_path / "storage_state.json"
+        state_file.write_text(json.dumps(state))
+        monkeypatch.setenv(_INITIAL_STORAGE_STATE_ENV_VAR, str(state_file))
+
+        executor = self._executor()
+        from unittest.mock import MagicMock
+
+        executor._server = MagicMock()
+        executor._server._set_storage = AsyncMock()
+
+        await executor._apply_initial_storage_state()
+
+        executor._server._set_storage.assert_awaited_once_with(state)
+
+    @pytest.mark.asyncio
+    async def test_noop_when_env_unset(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from openhands.tools.browser_use.impl import _INITIAL_STORAGE_STATE_ENV_VAR
+
+        monkeypatch.delenv(_INITIAL_STORAGE_STATE_ENV_VAR, raising=False)
+        executor = self._executor()
+        from unittest.mock import MagicMock
+
+        executor._server = MagicMock()
+        executor._server._set_storage = AsyncMock()
+
+        await executor._apply_initial_storage_state()
+
+        executor._server._set_storage.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_noop_when_file_missing_or_invalid(self, tmp_path, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from openhands.tools.browser_use.impl import _INITIAL_STORAGE_STATE_ENV_VAR
+
+        # Missing file.
+        monkeypatch.setenv(
+            _INITIAL_STORAGE_STATE_ENV_VAR, str(tmp_path / "does-not-exist.json")
+        )
+        executor = self._executor()
+        from unittest.mock import MagicMock
+
+        executor._server = MagicMock()
+        executor._server._set_storage = AsyncMock()
+        await executor._apply_initial_storage_state()
+        executor._server._set_storage.assert_not_awaited()
+
+        # Invalid JSON.
+        bad = tmp_path / "bad.json"
+        bad.write_text("not json{")
+        monkeypatch.setenv(_INITIAL_STORAGE_STATE_ENV_VAR, str(bad))
+        await executor._apply_initial_storage_state()
+        executor._server._set_storage.assert_not_awaited()
