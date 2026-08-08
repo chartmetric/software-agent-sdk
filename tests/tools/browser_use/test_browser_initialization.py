@@ -238,3 +238,53 @@ class TestBrowserInitialization:
             mock_async_executor.run_async.assert_called_once()
             args, kwargs = mock_async_executor.run_async.call_args
             assert kwargs["timeout"] == 300.0
+
+
+class TestBrowserWarmUp:
+    """Test the warm_up helper used by the tool-preload service."""
+
+    def _executor(self):
+        from unittest.mock import MagicMock, patch
+
+        with (
+            patch.object(
+                BrowserToolExecutor,
+                "_ensure_chromium_available",
+                return_value="/usr/bin/chromium",
+            ),
+            patch(
+                "openhands.tools.browser_use.impl.CustomBrowserUseServer",
+                return_value=MagicMock(),
+            ),
+            patch("openhands.tools.browser_use.impl.run_with_timeout"),
+        ):
+            return BrowserToolExecutor()
+
+    @pytest.mark.asyncio
+    async def test_warm_up_initializes_then_tears_down(self):
+        from unittest.mock import AsyncMock
+
+        executor = self._executor()
+        executor._ensure_initialized = AsyncMock()
+        executor.cleanup = AsyncMock()
+
+        await executor.warm_up()
+
+        executor._ensure_initialized.assert_awaited_once()
+        executor.cleanup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_warm_up_swallows_errors_and_still_tears_down(self):
+        from unittest.mock import AsyncMock
+
+        executor = self._executor()
+        executor._ensure_initialized = AsyncMock(
+            side_effect=RuntimeError("no chromium")
+        )
+        executor.cleanup = AsyncMock()
+
+        # Never raises: the browser just launches lazily on first use instead.
+        await executor.warm_up()
+
+        executor._ensure_initialized.assert_awaited_once()
+        executor.cleanup.assert_awaited_once()

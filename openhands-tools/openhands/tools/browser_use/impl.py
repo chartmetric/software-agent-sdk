@@ -691,6 +691,29 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             await self._server._inject_scripts_to_session()
             self._initialized = True
 
+    async def warm_up(self) -> None:
+        """Launch and tear down a browser session once to warm the OS caches.
+
+        The first real browser action otherwise pays the cost of launching
+        Chromium cold -- reading the binary and its shared libraries off disk,
+        loading fonts. Doing it once ahead of time (e.g. from the tool-preload
+        service at server startup) leaves those pages resident in the OS cache,
+        so the first conversation's launch is fast. The session is torn down
+        immediately afterwards, so this holds no browser process open.
+
+        Best-effort: any failure is swallowed, leaving the browser to launch
+        lazily on first use exactly as before.
+        """
+        try:
+            await self._ensure_initialized()
+        except Exception:
+            logger.debug("Browser warm-up initialization failed", exc_info=True)
+        finally:
+            try:
+                await self.cleanup()
+            except Exception:
+                logger.debug("Browser warm-up cleanup failed", exc_info=True)
+
     # Navigation & Browser Control Methods
     @recording_aware
     async def navigate(self, url: str, new_tab: bool = False) -> str:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from openhands.agent_server.config import get_default_config
 from openhands.sdk.logger import get_logger
 from openhands.sdk.tool.schema import Action
@@ -17,6 +19,7 @@ class ToolPreloadService:
     start first conversation"""
 
     running: bool = False
+    _warm_up_task: asyncio.Task[None] | None = None
 
     async def start(self) -> bool:
         """Preload tools"""
@@ -29,8 +32,15 @@ class ToolPreloadService:
         try:
             from openhands.tools.browser_use.impl import BrowserToolExecutor
 
-            # Creating an instance here to preload chomium
-            BrowserToolExecutor()
+            # Constructing the executor makes the Chromium binary available and
+            # imports the browser stack, but does not launch a browser: that
+            # still happens lazily on the first browser action. Launch and tear
+            # down a session once, in the background, so Chromium and its shared
+            # libraries are warm in the OS cache and the first conversation's
+            # launch is fast. It runs off the startup path (fire-and-forget) so
+            # a slow or failed launch never delays server readiness.
+            executor = BrowserToolExecutor()
+            self._warm_up_task = asyncio.create_task(executor.warm_up())
 
             # Pre-creating all these classes prevents processing which costs
             # significant time per tool on the first conversation invocation.
@@ -46,6 +56,14 @@ class ToolPreloadService:
     async def stop(self) -> None:
         """Stop the tool preload process."""
         self.running = False
+        task = self._warm_up_task
+        self._warm_up_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     def is_running(self) -> bool:
         """Check if tool preload is running."""
