@@ -96,12 +96,6 @@ else:
 
 logger = get_logger(__name__)
 
-# Names a JSON file whose {"cookies", "origins"} storage state is injected into
-# each fresh browser session so it opens already signed in. Written out of band
-# by the host (e.g. after a headless pre-auth), keeping session credentials out
-# of the agent's context.
-_INITIAL_STORAGE_STATE_ENV_VAR = "OH_BROWSER_INITIAL_STORAGE_STATE"
-
 DEFAULT_BROWSER_ACTION_TIMEOUT_SECONDS: Final[float] = 300.0
 # After this many consecutive failures, reset the browser session
 # (assumes the browser has crashed or become unrecoverable).
@@ -696,39 +690,6 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             # Note: rrweb scripts are injected lazily when recording starts
             await self._server._inject_scripts_to_session()
             self._initialized = True
-            await self._apply_initial_storage_state()
-
-    async def _apply_initial_storage_state(self) -> None:
-        """Apply a pre-seeded storage state into the fresh session, if provided.
-
-        When ``OH_BROWSER_INITIAL_STORAGE_STATE`` names a readable JSON file of
-        the ``{"cookies": [...], "origins": [...]}`` shape, its contents are
-        injected so the browser opens already signed in. The control plane
-        writes that file out of band (e.g. after a headless pre-authentication),
-        so the session credentials never pass through the agent's context. The
-        path is read on every initialization rather than cached, so the file may
-        be written any time before the first browser action.
-
-        Best-effort: an unset variable, or a missing, unreadable, or invalid
-        file, leaves the session signed out exactly as before.
-        """
-        path = os.environ.get(_INITIAL_STORAGE_STATE_ENV_VAR)
-        if not path:
-            return
-        try:
-            with open(path) as storage_file:
-                storage_state = json.load(storage_file)
-        except (OSError, ValueError):
-            logger.debug(
-                "No usable initial browser storage state at %s", path, exc_info=True
-            )
-            return
-        if not isinstance(storage_state, dict):
-            return
-        try:
-            await self._server._set_storage(storage_state)
-        except Exception:
-            logger.debug("Failed to apply initial browser storage state", exc_info=True)
 
     async def warm_up(self) -> None:
         """Launch and tear down a browser session once to warm the OS caches.
