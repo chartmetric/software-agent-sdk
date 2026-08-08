@@ -7,6 +7,7 @@ from rich.text import Text
 
 from openhands.sdk.event.types import ROOT_PARENT_ID, EventID, SourceType
 from openhands.sdk.llm import ImageContent, Message, TextContent
+from openhands.sdk.logger import get_logger
 from openhands.sdk.utils import utc_now
 from openhands.sdk.utils.models import DiscriminatedUnionMixin
 
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
     from openhands.sdk.event.llm_convertible import ActionEvent
 
 N_CHAR_PREVIEW = 500
+
+logger = get_logger(__name__)
 
 
 class Event(DiscriminatedUnionMixin, ABC):
@@ -152,7 +155,43 @@ class LLMConvertibleEvent(Event, ABC):
                     messages.append(msg)
                 i += 1
 
-        return messages
+        return _drop_orphaned_tool_results(messages)
+
+
+def _drop_orphaned_tool_results(messages: list[Message]) -> list[Message]:
+    """Drop tool-result messages whose call is absent from the serialized turn.
+
+    The view properties keep actions and observations paired at the event
+    level, but ``enforce_properties`` runs only on view rebuilds; an interrupt
+    or partial-stream race can leave a tool-role message in the live history
+    with no assistant ``tool_calls`` entry to match it. Providers hard-fail on
+    that shape (OpenAI: "No tool call found for function call output with
+    call_id ..."), and because the same history replays on every subsequent
+    request, a single orphan permanently wedges the conversation. Dropping the
+    orphan is safe — without its call the result is meaningless to the model —
+    and turns a permanently-failing conversation into a self-healing one.
+    """
+    call_ids = {
+        tool_call.id
+        for message in messages
+        if message.role == "assistant" and message.tool_calls
+        for tool_call in message.tool_calls
+    }
+    kept: list[Message] = []
+    for message in messages:
+        if (
+            message.role == "tool"
+            and message.tool_call_id is not None
+            and message.tool_call_id not in call_ids
+        ):
+            logger.warning(
+                "Dropping orphaned tool result for tool_call_id=%s: no matching "
+                "assistant tool call in the serialized history",
+                message.tool_call_id,
+            )
+            continue
+        kept.append(message)
+    return kept
 
 
 def _is_plain_user_message(message: Message) -> bool:

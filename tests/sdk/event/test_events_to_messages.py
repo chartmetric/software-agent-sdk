@@ -420,19 +420,73 @@ class TestEventsToMessages:
         assert messages[3].name == "get_weather"
 
     def test_agent_error_event(self):
-        """Test conversion of AgentErrorEvent."""
+        """Test conversion of AgentErrorEvent paired with its action."""
+        action_event = create_action_event(
+            thought_text="Running the command",
+            tool_name="terminal",
+            tool_call_id="call_err",
+            llm_response_id="response_err",
+            action_args={"command": "false"},
+        )
         error_event = AgentErrorEvent(
             error="Command failed with exit code 1",
             tool_call_id="call_err",
             tool_name="terminal",
         )
 
-        events = [error_event]
+        events = [action_event, error_event]
         messages = LLMConvertibleEvent.events_to_messages(events)  # type: ignore
 
-        assert len(messages) == 1
-        assert messages[0].role == "tool"
-        assert messages[0].content[0].text == "Command failed with exit code 1"  # type: ignore
+        assert len(messages) == 2
+        assert messages[1].role == "tool"
+        assert messages[1].content[0].text == "Command failed with exit code 1"  # type: ignore
+
+    def test_orphaned_tool_results_are_dropped(self):
+        """A tool result with no matching assistant tool call must not be sent.
+
+        Every producer pairs observation-like events with an ActionEvent, but
+        ``enforce_properties`` runs only on view rebuilds, so a race that gets
+        an unpaired tool-role event into the live history poisons every
+        subsequent request: OpenAI rejects the replayed history with "No tool
+        call found for function call output with call_id ..." and the
+        conversation wedges permanently. The serializer is the last line of
+        defense and must drop the orphan.
+        """
+        action_event = create_action_event(
+            thought_text="Checking the weather",
+            tool_name="get_weather",
+            tool_call_id="call_weather",
+            llm_response_id="response_1",
+            action_args={"location": "SF"},
+        )
+        paired_observation = ObservationEvent(
+            source="environment",
+            observation=EventsToMessagesMockObservation(result="Sunny"),
+            action_id=action_event.id,
+            tool_name="get_weather",
+            tool_call_id="call_weather",
+        )
+        orphaned_observation = ObservationEvent(
+            source="environment",
+            observation=EventsToMessagesMockObservation(result="stale result"),
+            action_id="action_gone",
+            tool_name="get_weather",
+            tool_call_id="call_orphan",
+        )
+        orphaned_error = AgentErrorEvent(
+            error="interrupted",
+            tool_call_id="call_orphan_err",
+            tool_name="terminal",
+        )
+
+        events = cast(
+            list[LLMConvertibleEvent],
+            [action_event, paired_observation, orphaned_observation, orphaned_error],
+        )
+        messages = LLMConvertibleEvent.events_to_messages(events)
+
+        assert [m.role for m in messages] == ["assistant", "tool"]
+        assert messages[1].tool_call_id == "call_weather"
 
     def test_complex_parallel_and_sequential_mix(self):
         """Test complex scenario with both parallel and sequential function calls."""
