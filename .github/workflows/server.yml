@@ -595,8 +595,8 @@ jobs:
             id-token: write
             packages: read
         env:
-            AWS_REGION: us-east-1
-            ECR_IMAGE: 897744604563.dkr.ecr.us-east-1.amazonaws.com/cm-pilot-agent-server
+            AWS_REGION: us-west-2
+            ECR_IMAGE: 897744604563.dkr.ecr.us-west-2.amazonaws.com/cm-pilot-agent-server
             ECR_REPOSITORY: cm-pilot-agent-server
             SDK_SHA: ${{ inputs.ecr_source_sha != '' && inputs.ecr_source_sha || github.sha }}
             SOURCE_IMAGE: ghcr.io/chartmetric/agent-server
@@ -613,7 +613,7 @@ jobs:
               uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
               with:
                   aws-region: ${{ env.AWS_REGION }}
-                  role-to-assume: arn:aws:iam::897744604563:role/cm-pilot-sdk-image-publisher
+                  role-to-assume: arn:aws:iam::897744604563:role/cm-pilot-sdk-image-publisher-usw2
                   role-session-name: cm-pilot-sdk-${{ github.run_id }}
 
             - name: Log in to Amazon ECR
