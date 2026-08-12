@@ -1004,6 +1004,22 @@ class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
                 executor = cls._shared_executor
 
             if executor is not None:
+                # The screencast and desktop services create this executor with
+                # no persistence directory, and in production they usually get
+                # there first: the conversation's Browser tab opens as soon as
+                # the sandbox reports RUNNING, minutes before the agent's first
+                # browser call. Reusing that instance verbatim left
+                # `full_output_save_dir` None for the whole conversation, so
+                # `include_screenshot=True` put the frame in the LLM context but
+                # never on disk -- and every screenshot the agent had to publish
+                # as a file needed a hand-rolled capture path instead
+                # (`pip install Pillow`, an X11 grab of the whole desktop, a raw
+                # CDP keystroke to clear an overlay: about three minutes per
+                # conversation). Adopting a directory only ever fills in a None,
+                # so the first caller that knows one wins and no existing
+                # persistence target is overwritten.
+                if executor.full_output_save_dir is None and full_output_save_dir:
+                    executor.full_output_save_dir = full_output_save_dir
                 cls._warn_config_ignored(executor_config)
                 return executor
 

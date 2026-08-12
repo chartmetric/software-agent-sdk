@@ -112,8 +112,20 @@ class TestConcurrentExecution:
 
 
 class TestTmuxPoolRecovery:
+    """Recovery from a shell that died mid-command.
+
+    ``__call__`` now refuses a top-level ``exit`` before running it (see
+    ``test_shell_exit_guard.py``), because waiting out the action timeout to
+    discover the dead pane cost minutes per occurrence. These tests therefore
+    drive ``_execute_pooled`` directly: the recovery path still has to work for
+    the deaths the guard cannot predict — a script that exits, a killed tmux
+    server, an OOM — and ``exit`` remains the cheapest way to provoke one.
+    """
+
     def test_shell_exit_returns_actionable_error_and_rebuilds_pool(self, pool_executor):
-        obs = pool_executor(TerminalAction(command="exit 7", timeout=1.0))
+        obs = pool_executor._execute_pooled(
+            TerminalAction(command="exit 7", timeout=1.0)
+        )
 
         assert obs.is_error
         assert obs.exit_code == -1
@@ -128,7 +140,9 @@ class TestTmuxPoolRecovery:
         assert "after_rebuild" in after.text
 
     def test_reset_after_shell_exit_uses_rebuilt_pool(self, pool_executor):
-        obs = pool_executor(TerminalAction(command="exit 0", timeout=1.0))
+        obs = pool_executor._execute_pooled(
+            TerminalAction(command="exit 0", timeout=1.0)
+        )
         assert obs.is_error
 
         reset_obs = pool_executor(

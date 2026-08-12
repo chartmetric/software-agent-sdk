@@ -30,7 +30,7 @@ def _reset_shared_executor():
 @pytest.fixture(autouse=True)
 def _mock_browser_executor_init():
     def fake_init(self, **_kwargs):
-        self.full_output_save_dir = None
+        self.full_output_save_dir = _kwargs.get("full_output_save_dir")
         self._initialized = False
         # Toolset tests never allocate browser resources; keep close() a no-op.
         self._cleanup_initiated = True
@@ -177,6 +177,36 @@ def test_browser_toolset_reuses_executor_created_by_desktop_api():
         tools = BrowserToolSet.create(conv_state=_create_test_conv_state(temp_dir))
 
         assert tools[0].executor is executor
+
+
+def test_reused_executor_adopts_the_conversation_persistence_dir():
+    """A screencast-created executor must still save screenshots to disk.
+
+    The screencast and desktop services build the shared executor without a
+    persistence directory and normally get there first, so reusing it verbatim
+    left screenshots in the LLM context only — with no file path to publish.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        executor = BrowserToolSet.get_or_create_shared_executor()
+        assert executor.full_output_save_dir is None
+
+        conv_state = _create_test_conv_state(temp_dir)
+        BrowserToolSet.create(conv_state=conv_state)
+
+        assert (
+            executor.full_output_save_dir == conv_state.env_observation_persistence_dir
+        )
+
+
+def test_reused_executor_keeps_its_existing_persistence_dir():
+    """Adoption only ever fills in a None; the first known directory wins."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        executor = BrowserToolSet.get_or_create_shared_executor(
+            full_output_save_dir="/original/observations"
+        )
+        BrowserToolSet.create(conv_state=_create_test_conv_state(temp_dir))
+
+        assert executor.full_output_save_dir == "/original/observations"
 
 
 def test_browser_toolset_shared_executor_survives_multiple_subagents():

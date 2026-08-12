@@ -2,6 +2,7 @@
 
 import os
 import platform
+import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -80,6 +81,151 @@ def looks_like_python_literal_argument(command: str) -> str | None:
     # Bash group commands `{ ls; }` always have a space after `{`.
     if a == "{" and b in ('"', "'"):
         return "dict literal"
+    return None
+
+
+_SHELL_EXIT_HINT_TEMPLATE = (
+    "[Tool-argument error] The `command` argument ends the persistent shell: "
+    "it runs `{offender}` at the top level.\n\n"
+    "The terminal is a long-lived tmux session shared across your tool calls. "
+    "A top-level `exit` (or `logout`) terminates that shell, so the pane and "
+    "its tmux server disappear, THIS command's output is lost, and the tool "
+    "blocks until the timeout before it can rebuild the pool. Nothing was "
+    "executed -- rewrite the command and send it again.\n\n"
+    "To propagate or inspect a status without exiting, use a check that stays "
+    "in the shell:\n"
+    '  - `...; code=$?; rm -f tmp; test "$code" -eq 0`\n'
+    '  - `...; code=$?; rm -f tmp; if [ "$code" -eq 0 ]; then echo ok; '
+    'else echo "failed with $code"; fi`\n'
+    "  - Or run the exiting part in a subshell: `( ...; exit 1 )`.\n\n"
+    "Note that the tool already reports the exit code of the last command, so "
+    "re-raising it with `exit` is rarely needed at all."
+)
+
+_SHELL_EXITING_BUILTINS = frozenset({"exit", "logout"})
+
+# Words that introduce a command rather than being one, so an `exit` right
+# after them is still in command position: `...; else exit 1; fi`.
+_COMMAND_INTRODUCING_WORDS = frozenset(
+    {"then", "else", "elif", "do", "!", "time", "command", "builtin", "eval"}
+)
+
+_HEREDOC_OPENER_RE = re.compile(
+    r"<<-?\s*(?P<quote>['\"]?)(?P<delim>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)"
+)
+
+_WORD_RE = re.compile(r"[^\s;|&()<>{}'\"`]+")
+
+
+def looks_like_shell_exiting_command(command: str) -> str | None:
+    """Detect a top-level ``exit``/``logout`` that would kill the shell.
+
+    The terminal tool keeps one persistent tmux pane per session, so a
+    top-level ``exit`` destroys the pane mid-call: the command's own output is
+    lost and the executor only discovers the dead session after the action
+    timeout elapses. Catching the command before it runs turns a multi-minute
+    stall into an immediate, actionable hint.
+
+    Returns the offending trailing command text, or ``None`` when the command
+    is safe. Deliberately conservative -- an ``exit`` inside quotes, a
+    heredoc body, a subshell ``(...)``, or a command substitution is left
+    alone, because those do not end the caller's shell. Missing a real case
+    only restores the previous behaviour; a false positive would block a
+    legitimate command, so ambiguity resolves to "safe".
+    """
+    depth = 0  # subshell / command-substitution nesting; > 0 cannot kill us
+    at_command_start = True
+    quote: str | None = None
+    heredoc_delimiter: str | None = None
+
+    for line in command.split("\n"):
+        if heredoc_delimiter is not None:
+            if line.strip() == heredoc_delimiter:
+                heredoc_delimiter = None
+            continue
+
+        index = 0
+        length = len(line)
+        while index < length:
+            char = line[index]
+
+            if quote == "'":
+                if char == "'":
+                    quote = None
+                index += 1
+                continue
+            if quote is not None:
+                # Double quotes and backticks honour backslash escapes.
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+                index += 1
+                continue
+
+            if char == "\\":
+                index += 2
+                continue
+            if char in ("'", '"', "`"):
+                quote = char
+                at_command_start = False
+                index += 1
+                continue
+            if char == "#" and at_command_start:
+                break  # comment runs to end of line
+            if char == "$" and index + 1 < length and line[index + 1] in ("(", "{"):
+                depth += 1
+                index += 2
+                continue
+            if char == "(":
+                depth += 1
+                at_command_start = True
+                index += 1
+                continue
+            if char in (")", "}"):
+                # A closing brace may end `${...}` (tracked) or a brace group
+                # (untracked, because it runs in the current shell).
+                depth = max(depth - 1, 0)
+                at_command_start = False
+                index += 1
+                continue
+            if char in (";", "|", "&", "{"):
+                # `{ ...; }` groups run in the current shell, so an `exit`
+                # inside one still ends it: treat `{` as a plain separator.
+                at_command_start = True
+                index += 1
+                continue
+            if char in (" ", "\t"):
+                index += 1
+                continue
+            if char == "<" and line.startswith("<<", index):
+                opener = _HEREDOC_OPENER_RE.match(line, index)
+                if opener is not None:
+                    heredoc_delimiter = opener.group("delim")
+                    index = opener.end()
+                else:
+                    index += 2
+                at_command_start = False
+                continue
+            if char == ">":
+                index += 1
+                continue
+
+            word_match = _WORD_RE.match(line, index)
+            if word_match is None:
+                index += 1
+                continue
+            word = word_match.group(0)
+            if at_command_start and depth == 0 and word in _SHELL_EXITING_BUILTINS:
+                return line[index:].strip()
+            if word not in _COMMAND_INTRODUCING_WORDS:
+                at_command_start = False
+            index = word_match.end()
+
+        # A newline separates commands just like `;` does.
+        at_command_start = True
+
     return None
 
 

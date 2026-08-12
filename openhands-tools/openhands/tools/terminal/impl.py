@@ -17,9 +17,11 @@ if TYPE_CHECKING:
 from openhands.tools.terminal.constants import CMD_OUTPUT_PS1_END
 from openhands.tools.terminal.definition import (
     _LITERAL_ARG_HINT_TEMPLATE,
+    _SHELL_EXIT_HINT_TEMPLATE,
     TerminalAction,
     TerminalObservation,
     looks_like_python_literal_argument,
+    looks_like_shell_exiting_command,
 )
 from openhands.tools.terminal.env import (
     ENV_VAR_NAME_RE,
@@ -572,6 +574,28 @@ class TerminalExecutor(ToolExecutor[TerminalAction, TerminalObservation]):
                         literal_kind=literal_kind,
                         head=head,
                     ),
+                    is_error=True,
+                    command=action.command,
+                    exit_code=None,
+                )
+
+            # A top-level `exit` ends the persistent shell. The pane and its
+            # tmux server vanish mid-command, so the executor never sees a
+            # closing prompt and blocks for the whole action timeout before
+            # `_execute_pooled` can recover -- production burned two four-minute
+            # waits on one conversation for a typecheck that itself takes four
+            # seconds, and lost its result both times. Refusing up front costs
+            # one turn instead.
+            offender = looks_like_shell_exiting_command(action.command)
+            if offender is not None:
+                logger.warning(
+                    "Rejected terminal call: command would end the persistent "
+                    "shell via %r. Returning structured hint to the model "
+                    "instead of executing.",
+                    offender,
+                )
+                return TerminalObservation.from_text(
+                    _SHELL_EXIT_HINT_TEMPLATE.format(offender=offender),
                     is_error=True,
                     command=action.command,
                     exit_code=None,
