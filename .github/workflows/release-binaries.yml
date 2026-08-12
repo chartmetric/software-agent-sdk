@@ -286,6 +286,16 @@ jobs:
     docker-smoke-test:
         name: Docker (${{ matrix.variant }}-${{ matrix.arch }})
         needs: resolve-tag
+        # This job smoke-tests the images `server.yml` pushes to
+        # ghcr.io/openhands/agent-server. The Chartmetric fork cannot publish
+        # there -- it pushes to ghcr.io/chartmetric/agent-server and to the
+        # organization's private ECR instead -- so all six matrix legs spent
+        # their full 45-minute wait on a tag that will never appear and then
+        # failed. That has made every single push to the fork's main red since
+        # at least 2026-08-08, at roughly four and a half CI hours per commit,
+        # which also buries real failures: the fork's own image publishing lives
+        # in `server.yml` and was green throughout.
+        if: github.repository == 'OpenHands/software-agent-sdk'
         runs-on: ${{ matrix.runner }}
         strategy:
             fail-fast: false
