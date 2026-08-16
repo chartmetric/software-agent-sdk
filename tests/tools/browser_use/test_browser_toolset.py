@@ -68,7 +68,7 @@ def test_browser_toolset_create_returns_list():
         tools = BrowserToolSet.create(conv_state=conv_state)
 
         assert isinstance(tools, list)
-        assert len(tools) == 17  # All browser tools (including recording tools)
+        assert len(tools) == 18  # All browser tools (including recording tools)
 
         # Verify all items are Tool instances
         for tool in tools:
@@ -92,6 +92,7 @@ def test_browser_toolset_create_includes_all_browser_tools():
             "browser_get_content",
             "browser_get_secret",
             "browser_type",
+            "browser_fill_form",
             "browser_scroll",
             "browser_go_back",
             "browser_list_tabs",
