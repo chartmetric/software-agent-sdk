@@ -399,6 +399,10 @@ the credential fields are no longer visible.
 class BrowserFillFormTool(ToolDefinition[BrowserFillFormAction, BrowserObservation]):
     """Tool for filling and optionally submitting one current-page form."""
 
+    # Browser tools do not consume arbitrary MCP metadata. Narrowing this
+    # inherited field keeps their public OpenAPI component strongly typed.
+    meta: dict[str, str] | None = None
+
     @classmethod
     def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
         return [
