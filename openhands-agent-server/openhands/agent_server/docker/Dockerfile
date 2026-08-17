@@ -101,39 +101,52 @@ RUN set -eux; \
     # reaping behaviour falls back to dumb-init's absence (the agent server
     # is short-lived enough on non-Debian images that PID 1 zombie reaping
     # has not been observed to matter — revisit if it does).
+    #
+    # `ripgrep` is what a coding agent reaches for first when it searches a
+    # checkout, and an agent that gets `rg: command not found` does not just
+    # fall back — it narrows the search it was about to run. It is packaged in
+    # Debian and Alpine, so those lists carry it directly. RHEL-family bases
+    # only ship it through EPEL and would fail the whole transaction on a
+    # missing name, so those paths install it separately and tolerate absence.
     if command -v apt-get >/dev/null 2>&1; then \
         apt-get -o Acquire::Retries=5 update; \
         apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
             bash ca-certificates curl wget sudo apt-utils git jq tmux tar \
             build-essential coreutils util-linux procps findutils grep sed \
-            tini apt-transport-https gnupg lsb-release xz-utils; \
+            ripgrep tini apt-transport-https gnupg lsb-release xz-utils; \
         rm -rf /var/lib/apt/lists/*; \
     elif command -v apk >/dev/null 2>&1; then \
         apk add --no-cache \
             bash ca-certificates curl wget sudo git jq tmux tar build-base \
-            coreutils util-linux procps findutils grep sed tini gnupg shadow xz; \
+            coreutils util-linux procps findutils grep sed ripgrep tini gnupg \
+            shadow xz; \
     elif command -v microdnf >/dev/null 2>&1; then \
         microdnf install -y \
             bash ca-certificates curl wget sudo git jq tmux tar make gcc gcc-c++ \
             coreutils util-linux procps-ng findutils grep sed shadow-utils \
             gnupg2 xz; \
+        microdnf install -y ripgrep || echo "ripgrep unavailable on this base image" >&2; \
         microdnf clean all; \
     elif command -v dnf >/dev/null 2>&1; then \
         dnf install -y \
             bash ca-certificates curl wget sudo git jq tmux tar make gcc gcc-c++ \
             coreutils util-linux procps-ng findutils grep sed shadow-utils \
             gnupg2 xz; \
+        dnf install -y ripgrep || echo "ripgrep unavailable on this base image" >&2; \
         dnf clean all; \
     elif command -v yum >/dev/null 2>&1; then \
         yum install -y \
             bash ca-certificates curl wget sudo git jq tmux tar make gcc gcc-c++ \
             coreutils util-linux procps-ng findutils grep sed shadow-utils \
             gnupg2 xz; \
+        yum install -y ripgrep || echo "ripgrep unavailable on this base image" >&2; \
         yum clean all; \
     elif command -v zypper >/dev/null 2>&1; then \
         zypper --non-interactive install --no-recommends \
             bash ca-certificates curl wget sudo git jq tmux tar make gcc gcc-c++ \
             coreutils util-linux procps findutils grep sed shadow gpg2 xz; \
+        zypper --non-interactive install --no-recommends ripgrep \
+            || echo "ripgrep unavailable on this base image" >&2; \
         zypper clean --all; \
     else \
         echo "Unsupported base image: no known package manager found" >&2; \
