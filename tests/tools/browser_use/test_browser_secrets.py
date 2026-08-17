@@ -15,8 +15,12 @@ from openhands.sdk.llm import LLM, Message, MessageToolCall, TextContent, Thinki
 from openhands.sdk.llm.utils.metrics import Metrics
 from openhands.sdk.llm.utils.telemetry import Telemetry
 from openhands.tools.browser_use.definition import (
+    BrowserFillFormAction,
+    BrowserFillFormTool,
+    BrowserFormField,
     BrowserGetContentAction,
     BrowserGetSecretAction,
+    BrowserObservation,
     BrowserTypeAction,
     BrowserTypeTool,
 )
@@ -103,6 +107,126 @@ def test_browser_type_can_resolve_json_field_without_exposing_value(
 
     type_secret_text.assert_awaited_once_with(2, SECRET_VALUE)
     assert SECRET_VALUE not in result.model_dump_json()
+
+
+def test_browser_fill_form_resolves_multiple_fields_without_exposing_values(
+    mock_browser_executor,
+):
+    email = "private@example.com"
+    conversation = _conversation_with_secrets(
+        {"TEST_ACCOUNT": json.dumps({"email": email, "password": SECRET_VALUE})}
+    )
+    fields = [
+        BrowserFormField(
+            index=1,
+            secret_name="TEST_ACCOUNT",
+            json_field="email",
+        ),
+        BrowserFormField(
+            index=2,
+            secret_name="TEST_ACCOUNT",
+            json_field="password",
+        ),
+    ]
+
+    with patch.object(
+        mock_browser_executor,
+        "fill_form",
+        new_callable=AsyncMock,
+        return_value=BrowserObservation.from_text(text="Final state"),
+    ) as fill_form:
+        result = mock_browser_executor(
+            BrowserFillFormAction(fields=fields, submit_index=3),
+            conversation,
+        )
+
+    fill_form.assert_awaited_once_with(
+        fields,
+        3,
+        False,
+        {0: email, 1: SECRET_VALUE},
+    )
+    serialized = result.model_dump_json()
+    assert email not in serialized
+    assert SECRET_VALUE not in serialized
+
+
+def test_browser_fill_form_rejects_screenshot_with_runtime_secrets(
+    mock_browser_executor,
+):
+    conversation = _conversation_with_secrets({"LOGIN_PASSWORD": SECRET_VALUE})
+
+    with patch.object(
+        mock_browser_executor,
+        "fill_form",
+        new_callable=AsyncMock,
+    ) as fill_form:
+        result = mock_browser_executor(
+            BrowserFillFormAction(
+                fields=[BrowserFormField(index=2, secret_name="LOGIN_PASSWORD")],
+                include_screenshot=True,
+            ),
+            conversation,
+        )
+
+    fill_form.assert_not_awaited()
+    assert result.is_error is True
+    assert "separate browser_get_state" in result.text
+
+
+def test_browser_fill_form_masks_nested_literal_secret_before_persistence(
+    mock_browser_executor,
+):
+    llm = LLM(
+        usage_id="browser-fill-form-secret-test",
+        model="test-model",
+        api_key=SecretStr("test-key"),
+        base_url="http://test",
+    )
+    agent = Agent(llm=llm, tools=[], include_default_tools=[])
+    tool = BrowserFillFormTool.create(mock_browser_executor)[0]
+    agent._initialized = True
+    agent._tools = {tool.name: tool}
+    conversation = Conversation(agent=agent)
+    conversation.state.secret_registry.update_secrets({"LOGIN_PASSWORD": SECRET_VALUE})
+    tool_call = MessageToolCall(
+        id="call-fill-form",
+        name=tool.name,
+        arguments=json.dumps(
+            {
+                "fields": [{"index": 2, "text": SECRET_VALUE}],
+                "submit_index": 3,
+            }
+        ),
+        origin="completion",
+    )
+
+    action_event = agent._get_action_event(
+        tool_call,
+        conversation,
+        "response-fill-form",
+        lambda event: None,
+    )
+
+    assert isinstance(action_event, ActionEvent)
+    assert isinstance(action_event.action, BrowserFillFormAction)
+    assert action_event.action.fields[0].text == "<secret-hidden>"
+    assert SECRET_VALUE not in action_event.model_dump_json()
+
+    with patch.object(
+        mock_browser_executor,
+        "fill_form",
+        new_callable=AsyncMock,
+        return_value=BrowserObservation.from_text(text="Final state"),
+    ) as fill_form:
+        agent._execute_action_event(conversation, action_event)
+
+    fill_form.assert_awaited_once_with(
+        [BrowserFormField(index=2, text=SECRET_VALUE)],
+        3,
+        False,
+        {0: SECRET_VALUE},
+    )
 
 
 def test_browser_type_action_event_persists_masked_data_and_executes_raw_text(

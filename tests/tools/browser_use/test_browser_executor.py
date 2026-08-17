@@ -17,6 +17,8 @@ import pytest
 from openhands.sdk.utils.async_executor import AsyncExecutor
 from openhands.tools.browser_use.definition import (
     BrowserClickAction,
+    BrowserFillFormAction,
+    BrowserFormField,
     BrowserGetStateAction,
     BrowserNavigateAction,
     BrowserObservation,
@@ -188,6 +190,44 @@ async def test_browser_executor_action_routing_click(mock_click, mock_browser_ex
 
     mock_click.assert_called_once_with(5, True)
     assert_browser_observation_success(result, "Click successful")
+
+
+@patch("openhands.tools.browser_use.impl.BrowserToolExecutor.fill_form")
+async def test_browser_executor_action_routing_fill_form(
+    mock_fill_form, mock_browser_executor
+):
+    expected_observation = BrowserObservation.from_text(text="Final state")
+    mock_fill_form.return_value = expected_observation
+    fields = [
+        BrowserFormField(index=1, text="person@example.com"),
+        BrowserFormField(index=2, secret_name="LOGIN", json_field="password"),
+    ]
+
+    result = await mock_browser_executor._execute_action(
+        BrowserFillFormAction(
+            fields=fields,
+            submit_index=3,
+            include_screenshot=False,
+        ),
+        runtime_secret_values={1: "private-password"},
+    )
+
+    mock_fill_form.assert_awaited_once_with(
+        fields,
+        3,
+        False,
+        {1: "private-password"},
+    )
+    assert result is expected_observation
+
+
+def test_browser_fill_form_rejects_ambiguous_indices():
+    field = BrowserFormField(index=1, text="value")
+
+    with pytest.raises(ValueError, match="unique"):
+        BrowserFillFormAction(fields=[field, field])
+    with pytest.raises(ValueError, match="submit_index"):
+        BrowserFillFormAction(fields=[field], submit_index=1)
 
 
 @patch("openhands.tools.browser_use.impl.BrowserToolExecutor.get_state")

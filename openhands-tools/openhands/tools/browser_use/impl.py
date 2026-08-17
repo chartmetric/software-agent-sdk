@@ -27,6 +27,8 @@ from openhands.sdk.utils.async_executor import AsyncExecutor
 from openhands.tools.browser_use.definition import (
     BROWSER_RECORDING_OUTPUT_DIR,
     BrowserAction,
+    BrowserFillFormAction,
+    BrowserFormField,
     BrowserGetSecretAction,
     BrowserObservation,
     BrowserTypeAction,
@@ -446,6 +448,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         )
 
         secret_text: str | None = None
+        runtime_secret_values: dict[int, str] = {}
         mask_text: Callable[[str], str] | None = None
         if conversation is not None:
             secret_registry = conversation.state.secret_registry
@@ -479,6 +482,35 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                     masked_text = mask_text(action.text)
                     if masked_text != action.text:
                         secret_text = action.text
+            if isinstance(action, BrowserFillFormAction):
+                for position, field in enumerate(action.fields):
+                    if field.secret_name is not None:
+                        value = secret_registry.get_secret_value(
+                            field.secret_name, field.json_field
+                        )
+                        if value is None:
+                            return BrowserObservation.from_text(
+                                text="Unable to resolve a registered browser secret",
+                                is_error=True,
+                                full_output_save_dir=self.full_output_save_dir,
+                            )
+                        runtime_secret_values[position] = value
+                    elif field.text is not None:
+                        masked_text = mask_text(field.text)
+                        if masked_text != field.text:
+                            runtime_secret_values[position] = field.text
+                if action.include_screenshot and runtime_secret_values:
+                    return BrowserObservation.from_text(
+                        text=(
+                            "A form containing registered secret values cannot include "
+                            "a screenshot. Submit without one, verify that the "
+                            "credential fields are no longer visible, then use a "
+                            "separate "
+                            "browser_get_state call if visual evidence is required."
+                        ),
+                        is_error=True,
+                        full_output_save_dir=self.full_output_save_dir,
+                    )
         elif isinstance(action, (BrowserGetSecretAction, BrowserTypeAction)) and (
             isinstance(action, BrowserGetSecretAction) or action.secret_name is not None
         ):
@@ -501,6 +533,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                     action,
                     secret_text,
                     mask_text,
+                    runtime_secret_values,
                     timeout=effective_timeout,
                 )
         except builtins.TimeoutError as error:
@@ -581,11 +614,13 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         action,
         secret_text: str | None = None,
         mask_text: Callable[[str], str] | None = None,
+        runtime_secret_values: dict[int, str] | None = None,
     ):
         """Execute browser action asynchronously."""
         from openhands.tools.browser_use.definition import (
             BrowserClickAction,
             BrowserCloseTabAction,
+            BrowserFillFormAction,
             BrowserGetContentAction,
             BrowserGetStateAction,
             BrowserGetStorageAction,
@@ -627,6 +662,13 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                     if action.text is None:
                         raise ValueError("Browser text was not provided")
                     result = await self.type_text(action.index, action.text)
+            elif isinstance(action, BrowserFillFormAction):
+                return await self.fill_form(
+                    action.fields,
+                    action.submit_index,
+                    action.include_screenshot,
+                    runtime_secret_values or {},
+                )
             elif isinstance(action, BrowserGetStateAction):
                 return await self.get_state(action.include_screenshot)
             elif isinstance(action, BrowserGetStorageAction):
@@ -742,6 +784,26 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
     async def type_secret_text(self, index: int, text: str) -> str:
         await self._ensure_initialized()
         return await self._server._type_secret_text(index, text)
+
+    async def fill_form(
+        self,
+        fields: list[BrowserFormField],
+        submit_index: int | None,
+        include_screenshot: bool,
+        runtime_secret_values: dict[int, str],
+    ) -> BrowserObservation:
+        """Fill one stable form and return only its final browser state."""
+        for position, field in enumerate(fields):
+            value = runtime_secret_values.get(position)
+            if value is not None:
+                await self.type_secret_text(field.index, value)
+            elif field.text is not None:
+                await self.type_text(field.index, field.text)
+            else:
+                raise ValueError(f"Form field {position} has no input value")
+        if submit_index is not None:
+            await self.click(submit_index)
+        return await self.get_state(include_screenshot)
 
     async def scroll(self, direction: str = "down") -> str:
         """Scroll the page."""

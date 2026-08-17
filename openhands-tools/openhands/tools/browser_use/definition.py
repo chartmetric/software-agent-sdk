@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from rich.text import Text
 
 from openhands.sdk.llm import ImageContent, TextContent
@@ -317,6 +317,101 @@ class BrowserTypeTool(ToolDefinition[BrowserTypeAction, BrowserObservation]):
                 observation_type=BrowserObservation,
                 annotations=ToolAnnotations(
                     title="browser_type",
+                    readOnlyHint=False,
+                    destructiveHint=False,
+                    idempotentHint=False,
+                    openWorldHint=True,
+                ),
+                executor=executor,
+            )
+        ]
+
+
+# ============================================
+# `browser_fill_form`
+# ============================================
+class BrowserFormField(BaseModel):
+    """One input field filled as part of a browser form transaction."""
+
+    index: int = Field(
+        ge=0, description="The index of the input element (from browser_get_state)"
+    )
+    text: str | None = Field(default=None, description="Literal text to type")
+    secret_name: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Registered secret name whose value should be typed",
+    )
+    json_field: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional top-level JSON field to type from the registered secret",
+    )
+
+    @model_validator(mode="after")
+    def validate_input_source(self):
+        if (self.text is None) == (self.secret_name is None):
+            raise ValueError("Provide exactly one of text or secret_name")
+        if self.json_field is not None and self.secret_name is None:
+            raise ValueError("json_field requires secret_name")
+        return self
+
+
+class BrowserFillFormAction(BrowserAction):
+    """Fill multiple current-page inputs and optionally submit the form."""
+
+    fields: list[BrowserFormField] = Field(min_length=1, max_length=20)
+    submit_index: int | None = Field(
+        default=None,
+        ge=0,
+        description="Optional button index to click after all fields are filled",
+    )
+    include_screenshot: bool = Field(
+        default=False,
+        description="Whether the final page state should include a screenshot",
+    )
+
+    @model_validator(mode="after")
+    def validate_indices(self):
+        indices = [field.index for field in self.fields]
+        if len(indices) != len(set(indices)):
+            raise ValueError("Each form field index must be unique")
+        if self.submit_index in indices:
+            raise ValueError("submit_index must not also be a form field index")
+        return self
+
+
+BROWSER_FILL_FORM_DESCRIPTION = """Fill multiple fields from one browser_get_state
+result, optionally click one submit button, and return the final page state.
+
+Use this instead of separate browser_type and browser_click calls when the current page
+already shows every field and the optional submit control. Each field accepts literal
+text or a registered secret reference. Registered secret values never enter model
+context.
+
+Only use indices from the latest browser_get_state result. The submit click always runs
+last. Screenshots are omitted unless include_screenshot is true. A batch containing
+registered secret values cannot include a screenshot; capture visual evidence only after
+the credential fields are no longer visible.
+"""
+
+
+class BrowserFillFormTool(ToolDefinition[BrowserFillFormAction, BrowserObservation]):
+    """Tool for filling and optionally submitting one current-page form."""
+
+    # Browser tools do not consume arbitrary MCP metadata. Narrowing this
+    # inherited field keeps their public OpenAPI component strongly typed.
+    meta: dict[str, str] | None = None
+
+    @classmethod
+    def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
+        return [
+            cls(
+                description=BROWSER_FILL_FORM_DESCRIPTION,
+                action_type=BrowserFillFormAction,
+                observation_type=BrowserObservation,
+                annotations=ToolAnnotations(
+                    title="browser_fill_form",
                     readOnlyHint=False,
                     destructiveHint=False,
                     idempotentHint=False,
@@ -1050,6 +1145,7 @@ class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
             BrowserGetContentTool,
             BrowserGetSecretTool,
             BrowserTypeTool,
+            BrowserFillFormTool,
             BrowserScrollTool,
             BrowserGoBackTool,
             BrowserListTabsTool,
