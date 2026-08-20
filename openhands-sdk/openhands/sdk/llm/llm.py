@@ -2671,11 +2671,16 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         # extends every turn. Anthropic-only; Gemini is excluded from
         # PROMPT_CACHE_MODELS because its cache can't extend this way.
         for message in reversed(messages):
-            if message.role in ("user", "tool"):
+            if message.role in ("user", "tool") and message.content:
                 message.content[
                     -1
                 ].cache_prompt = True  # Last item inside the message content
                 break
+            # A message with no content cannot carry the marker. Keep looking
+            # rather than indexing into it: a tool whose observation renders to
+            # nothing would otherwise raise IndexError out of the run loop and
+            # end the conversation, after its tool call had already succeeded.
+            # Marking an earlier message only shortens the cached prefix.
 
     def _inline_required(self) -> bool:
         """Resolve whether http(s) image URLs must be downloaded and inlined."""
