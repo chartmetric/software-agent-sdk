@@ -14,6 +14,8 @@ from openhands.tools.measure_timing import (
 )
 from openhands.tools.measure_timing.definition import (
     COLD_FIRST_RUN_RATIO,
+    MeasureTimingObservation,
+    TimingComparisonRow,
     TimingTarget,
 )
 
@@ -434,3 +436,80 @@ def test_a_comparison_needs_at_least_two_targets():
                 TimingTarget(label="b", url="http://b/"),
             ],
         )
+
+
+def test_a_response_the_server_declined_is_not_reported_as_a_duration():
+    """A 20-second 503 reads as a bottleneck and is an absence.
+
+    Production, conversation 2a1e4ad5: a sandbox preview proxy waited its
+    20-second cold-start window for a port nothing listened on, then returned
+    its own 503. The tool recorded a duration and no error, because a 503 is a
+    response, and the agent was handed 20056ms against 20064ms as a tidy 50/50
+    comparison of two pages. Neither number was about a page.
+    """
+    from openhands.tools.measure_timing.definition import _unmeasured_note
+
+    declined = MeasureTimingObservation(
+        target="filtered",
+        durations_ms=[20056.6, 20050.1, 20061.0],
+        statuses=[503, 503, 503],
+        median_ms=20056.6,
+        min_ms=20050.1,
+        max_ms=20061.0,
+        unavailable_runs=3,
+    )
+
+    assert "Did not measure" in declined.summary
+    assert "declined by the server" in declined.summary
+    # The number itself must not be offered as the target's latency.
+    assert "20057ms" not in declined.summary
+    # A comparison row carries no statuses, so the note is where it says so.
+    assert _unmeasured_note(declined) == "declined by the server (status [503])"
+
+
+def test_a_comparison_where_nothing_answered_does_not_read_as_a_comparison():
+    """Shares are computed over whatever came back, so they always look real.
+
+    The closing line used to say no single target dominated -- true of two
+    numbers that describe the same proxy timing itself out twice, and exactly
+    the attribution the shares exist to prevent.
+    """
+    note = "declined by the server (status [503])"
+    nothing_answered = MeasureTimingObservation(
+        target="filtered, unfiltered",
+        target_kind="comparison",
+        condition="unauthenticated browser-equivalent document request",
+        comparison=[
+            TimingComparisonRow(
+                label="filtered", median_ms=20056.6, share_pct=50.0, note=note
+            ),
+            TimingComparisonRow(
+                label="unfiltered", median_ms=20064.5, share_pct=50.0, note=note
+            ),
+        ],
+    )
+    assert "None of these reached its target" in nothing_answered.summary
+    assert "No single target dominates" not in nothing_answered.summary
+
+    one_answered = MeasureTimingObservation(
+        target="a, b",
+        target_kind="comparison",
+        condition="warm",
+        comparison=[
+            TimingComparisonRow(label="a", median_ms=900.0, share_pct=100.0),
+            TimingComparisonRow(label="b", median_ms=20050.0, share_pct=0.0, note=note),
+        ],
+    )
+    assert "1 of 2 targets did not answer" in one_answered.summary
+    assert "Only one target answered" in one_answered.summary
+
+    served = MeasureTimingObservation(
+        target="a, b",
+        target_kind="comparison",
+        condition="warm",
+        comparison=[
+            TimingComparisonRow(label="a", median_ms=842.0, share_pct=73.9),
+            TimingComparisonRow(label="b", median_ms=297.0, share_pct=26.1),
+        ],
+    )
+    assert "a is 74% of the total" in served.summary

@@ -74,6 +74,14 @@ COLD_FIRST_RUN_FLOOR_MS = 50.0
 AUTH_STATUSES = frozenset({401, 403})
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 AUTH_PATH_HINTS = ("login", "signin", "sign-in", "auth", "sso", "session", "account")
+# A response the server refused to serve is not the target answering, and its
+# duration belongs to whatever refused. Measured in production, and it is the
+# more dangerous direction than the sign-in wall: a sandbox preview proxy waited
+# 20 seconds for a port nothing listened on and then returned its own 503, so a
+# comparison of two pages came back 20056.6ms against 20064.5ms, a tidy 50/50
+# split, no error, and nothing in it about either page. A number that large reads
+# as a real bottleneck rather than as an absence, which is why it must be named.
+UNAVAILABLE_STATUS_FLOOR = 500
 
 MEASURE_TIMING_DESCRIPTION = """Time something the running system actually does, and return the observed durations.
 
@@ -297,6 +305,13 @@ class MeasureTimingObservation(Observation):
         default=0,
         description="Runs answered by a sign-in wall rather than the target.",
     )
+    unavailable_runs: int = Field(
+        default=0,
+        description=(
+            "Runs the server declined to serve (5xx), whose duration belongs to "
+            "whatever refused rather than to the target."
+        ),
+    )
     auth_redirect_to: str = Field(
         default="", description="Where the sign-in wall sent the request."
     )
@@ -331,19 +346,54 @@ class MeasureTimingObservation(Observation):
                 if row.note:
                     line += f"  [{row.note}]"
                 lines.append(line)
-            top = rows[0]
-            if len(rows) > 1 and top.share_pct >= DOMINANT_SHARE_PCT:
+            measured = [row for row in rows if not row.note]
+            if not measured:
+                # The shares are computed over the durations that came back, so
+                # when none of them is about its target they read as a real
+                # comparison of real numbers. Production: two pages "compared"
+                # 20056ms against 20064ms, a 50/50 split, and the closing line
+                # said no single target dominated -- which is true of numbers
+                # that describe the same proxy timing itself out twice.
+                lines.append(
+                    "  None of these reached its target, so there is nothing here "
+                    "to compare and no share above is about the thing it names. "
+                    "Fix what is answering instead, then measure again."
+                )
+                return "\n".join(lines)
+            top = measured[0]
+            if len(measured) < len(rows):
+                lines.append(
+                    f"  {len(rows) - len(measured)} of {len(rows)} targets did not "
+                    "answer, so the shares are only over the ones that did."
+                )
+            if len(measured) > 1 and top.share_pct >= DOMINANT_SHARE_PCT:
                 lines.append(
                     f"  {top.label} is {top.share_pct:.0f}% of the total, so "
                     "that is where the cost is. Changing anything else leaves it in "
                     "place."
                 )
-            else:
+            elif len(measured) > 1:
                 lines.append(
                     "  No single target dominates, so naming one of these as the "
                     "cause is not supported by these numbers."
                 )
+            else:
+                lines.append(
+                    "  Only one target answered, so these numbers cannot say which "
+                    "of several things the cost is."
+                )
             return "\n".join(lines)
+        if self.unavailable_runs and self.unavailable_runs == len(self.durations_ms):
+            return (
+                f"Did not measure {self.target}: every run was declined by the "
+                f"server (status {sorted(set(self.statuses))}). The duration "
+                "belongs to whatever refused the request, not to the target -- "
+                "and a large one reads as a bottleneck when it is an absence. "
+                "Measured: a sandbox preview waited 20 seconds for a port "
+                "nothing served and returned its own 503, so two pages compared "
+                "20056ms against 20064ms and neither number was about a page. "
+                "Find out what is answering before timing it again."
+            )
         if self.auth_blocked_runs and self.auth_blocked_runs == len(self.durations_ms):
             where = f" to {self.auth_redirect_to}" if self.auth_redirect_to else ""
             return (
@@ -409,6 +459,11 @@ class MeasureTimingObservation(Observation):
         return content
 
 
+def _is_unavailable(status: int) -> bool:
+    """Whether the server declined to serve the request at all."""
+    return status >= UNAVAILABLE_STATUS_FLOOR
+
+
 def _looks_like_auth_wall(status: int, location: str) -> bool:
     """Whether this response is a sign-in wall rather than the thing asked for."""
     if status in AUTH_STATUSES:
@@ -434,6 +489,23 @@ def _first_hit_dominates(first_hit_ms: float | None, durations: list[float]) -> 
         first_hit_ms >= steady * COLD_FIRST_RUN_RATIO
         and first_hit_ms - steady >= COLD_FIRST_RUN_FLOOR_MS
     )
+
+
+def _unmeasured_note(result: "MeasureTimingObservation") -> str:
+    """Why this target's duration is not about this target, if it is not.
+
+    A comparison row carries no statuses of its own, so this one field is where a
+    row says it is not a measurement -- which is what a reader, human or
+    otherwise, has to key on. Left empty when the target did answer.
+    """
+    runs = len(result.durations_ms)
+    if not runs:
+        return ""
+    if result.unavailable_runs == runs:
+        return f"declined by the server (status {sorted(set(result.statuses))})"
+    if result.auth_blocked_runs == runs:
+        return "answered by a sign-in wall"
+    return ""
 
 
 class MeasureTimingExecutor(
@@ -529,13 +601,7 @@ class MeasureTimingExecutor(
                     label=target.label,
                     median_ms=result.median_ms,
                     share_pct=0.0,
-                    note=result.error
-                    or (
-                        "answered by a sign-in wall"
-                        if result.auth_blocked_runs
-                        and result.auth_blocked_runs == len(result.durations_ms)
-                        else ""
-                    ),
+                    note=result.error or _unmeasured_note(result),
                 )
             )
         total = sum(row.median_ms for row in rows) or 1.0
@@ -556,6 +622,7 @@ class MeasureTimingExecutor(
         first_hit_ms: float | None = None
         auth_blocked = 0
         auth_location = ""
+        unavailable = 0
         target_kind = "request" if action.url else "command"
 
         async with httpx.AsyncClient(
@@ -601,6 +668,8 @@ class MeasureTimingExecutor(
                 if _looks_like_auth_wall(code, location):
                     auth_blocked += 1
                     auth_location = auth_location or location
+                if action.url and _is_unavailable(code):
+                    unavailable += 1
                 if index == 0:
                     body_sample = output.strip() or None
 
@@ -610,6 +679,7 @@ class MeasureTimingExecutor(
             condition=action.condition,
             first_hit_ms=first_hit_ms,
             auth_blocked_runs=auth_blocked,
+            unavailable_runs=unavailable,
             auth_redirect_to=auth_location,
             cold_first_run=_first_hit_dominates(first_hit_ms, durations),
             durations_ms=durations,
