@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import httpx
-from pydantic import Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from rich.text import Text
 
 from openhands.sdk.llm import ImageContent, TextContent
@@ -52,6 +52,11 @@ class MeasurementBlocked(Exception):
 
 
 MAX_REPEAT = 20
+# More than a handful stops being a comparison and becomes a survey.
+MAX_TARGETS = 6
+# Below this the numbers do not single anything out, and saying they do is the
+# attribution error this comparison exists to prevent.
+DOMINANT_SHARE_PCT = 60.0
 DEFAULT_REPEAT = 5
 REQUEST_TIMEOUT_SECONDS = 60.0
 COMMAND_TIMEOUT_SECONDS = 600.0
@@ -78,7 +83,11 @@ what work a path performs and never how long that work takes, so a diagnosis dra
 from source alone is not a measurement however plausible it reads.
 
 Give `url` to time a request, or `command` to time anything the shell can run -- a
-query, a build, a script, a test. If the target sits behind a sign-in, send the
+query, a build, a script, a test. Give `targets` instead when the question is
+*which* of several things is the cost: a slow page is not a cause, so time the page
+document and the requests it issues together and the shares say whether the server
+or the page is the answer. Measuring is not attributing -- one number tells you
+something is slow, and a comparison tells you what to change. If the target sits behind a sign-in, send the
 session already established as a Cookie or Authorization header: a sign-in wall
 answers immediately, so timing it yields a small confident number that describes
 the wall and not the page. Time the request the page actually issues rather
@@ -92,6 +101,43 @@ Repeat enough times that one outlier cannot carry the result, and give
 `reset_command` when the number depends on a starting condition -- a cold cache, a
 cleared key -- so each run measures the same thing. Measure before the change and
 again after, and report both."""  # noqa: E501
+
+
+class TimingComparisonRow(BaseModel):
+    """One target's result inside a comparison."""
+
+    label: str
+    median_ms: float
+    share_pct: float
+    note: str = ""
+
+
+class TimingTarget(BaseModel):
+    """One labelled thing to time, so several can be compared in one call."""
+
+    label: str = Field(
+        description=(
+            "What this target is, in a few words -- 'page document', "
+            "'artists API', 'render after data'. The labels are what make the "
+            "comparison readable."
+        )
+    )
+    url: str | None = Field(default=None, description="Absolute URL to request.")
+    command: str | None = Field(
+        default=None, description="Shell command to time instead of a request."
+    )
+
+    @model_validator(mode="after")
+    def _one_target(self) -> "TimingTarget":
+        if bool(self.url) == bool(self.command):
+            raise ValueError(
+                f"target {self.label!r}: give exactly one of `url` or `command`"
+            )
+        return self
+
+    @property
+    def target(self) -> str:
+        return self.url or self.command or ""
 
 
 class MeasureTimingAction(Action):
@@ -145,6 +191,16 @@ class MeasureTimingAction(Action):
             "path instead."
         ),
     )
+    targets: list[TimingTarget] = Field(
+        default_factory=list,
+        description=(
+            "Two or more labelled things to time in one call, when the question is "
+            "which of them is the cost. A slow page is not a cause: time the page "
+            "document and the requests it issues, and the comparison says whether "
+            "the server or the page is the answer. Bounded at "
+            f"{MAX_TARGETS}. Use this instead of `url`/`command` when comparing."
+        ),
+    )
     condition: str | None = Field(
         default=None,
         description=(
@@ -161,10 +217,23 @@ class MeasureTimingAction(Action):
 
     @model_validator(mode="after")
     def _one_target(self) -> "MeasureTimingAction":
+        if self.targets:
+            if self.url or self.command:
+                raise ValueError(
+                    "Give `targets` or a single `url`/`command`, not both."
+                )
+            if len(self.targets) < 2:
+                raise ValueError(
+                    "`targets` is for comparing, so it needs at least two. Use "
+                    "`url` or `command` to time one thing."
+                )
+            if len(self.targets) > MAX_TARGETS:
+                raise ValueError(f"At most {MAX_TARGETS} targets in one call.")
+            return self
         if bool(self.url) == bool(self.command):
             raise ValueError(
-                "Give exactly one of `url` or `command` -- the first times a request, "
-                "the second times a shell command."
+                "Give exactly one of `url` or `command`, or two or more `targets` "
+                "when the question is which of them is the cost."
             )
         return self
 
@@ -217,6 +286,13 @@ class MeasureTimingObservation(Observation):
         default=False,
         description="The first hit dominated the steady state.",
     )
+    comparison: list[TimingComparisonRow] = Field(
+        default_factory=list,
+        description=(
+            "One entry per labelled target: label, median_ms, and its share of the "
+            "total. Present only for a multi-target call."
+        ),
+    )
     auth_blocked_runs: int = Field(
         default=0,
         description="Runs answered by a sign-in wall rather than the target.",
@@ -244,6 +320,30 @@ class MeasureTimingObservation(Observation):
                 f"Could not time {self.target}: {self.error}. This is a blocked "
                 "measurement, not a slow result -- do not report a duration."
             )
+        if self.comparison:
+            rows = sorted(self.comparison, key=lambda r: r.median_ms, reverse=True)
+            lines = [f"condition: {self.condition or 'not stated'}"]
+            for row in rows:
+                line = (
+                    f"  {row.label}: {row.median_ms:.0f}ms"
+                    f"  ({row.share_pct:.0f}% of the measured total)"
+                )
+                if row.note:
+                    line += f"  [{row.note}]"
+                lines.append(line)
+            top = rows[0]
+            if len(rows) > 1 and top.share_pct >= DOMINANT_SHARE_PCT:
+                lines.append(
+                    f"  {top.label} is {top.share_pct:.0f}% of the total, so "
+                    "that is where the cost is. Changing anything else leaves it in "
+                    "place."
+                )
+            else:
+                lines.append(
+                    "  No single target dominates, so naming one of these as the "
+                    "cause is not supported by these numbers."
+                )
+            return "\n".join(lines)
         if self.auth_blocked_runs and self.auth_blocked_runs == len(self.durations_ms):
             where = f" to {self.auth_redirect_to}" if self.auth_redirect_to else ""
             return (
@@ -404,6 +504,50 @@ class MeasureTimingExecutor(
             "",
         )
 
+    async def _measure_targets(
+        self, action: MeasureTimingAction
+    ) -> MeasureTimingObservation:
+        """Time each labelled target and report their shares.
+
+        A slow page is not a cause. Timing the page and the requests it issues in
+        one call is what turns "it is slow" into "the server is 92% of it", which
+        is the step that decides what to change. Run sequentially so the targets do
+        not contend with each other and inflate the very numbers being compared.
+        """
+        rows: list[TimingComparisonRow] = []
+        for target in action.targets:
+            one = action.model_copy(
+                update={
+                    "targets": [],
+                    "url": target.url,
+                    "command": target.command,
+                }
+            )
+            result = await self._measure(one)
+            rows.append(
+                TimingComparisonRow(
+                    label=target.label,
+                    median_ms=result.median_ms,
+                    share_pct=0.0,
+                    note=result.error
+                    or (
+                        "answered by a sign-in wall"
+                        if result.auth_blocked_runs
+                        and result.auth_blocked_runs == len(result.durations_ms)
+                        else ""
+                    ),
+                )
+            )
+        total = sum(row.median_ms for row in rows) or 1.0
+        for row in rows:
+            row.share_pct = row.median_ms / total * 100.0
+        return MeasureTimingObservation(
+            target=", ".join(t.label for t in action.targets),
+            target_kind="comparison",
+            condition=action.condition,
+            comparison=rows,
+        )
+
     async def _measure(self, action: MeasureTimingAction) -> MeasureTimingObservation:
         durations: list[float] = []
         statuses: list[int] = []
@@ -487,16 +631,17 @@ class MeasureTimingExecutor(
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
+        run = self._measure_targets if action.targets else self._measure
         if loop is None:
-            return asyncio.run(self._measure(action))
+            return asyncio.run(run(action))
         # Called from inside a running loop: hand the work to a private one so the
         # blocking tool contract still holds.
         result: dict[str, MeasureTimingObservation] = {}
 
-        def run() -> None:
-            result["value"] = asyncio.run(self._measure(action))
+        def run_in_thread() -> None:
+            result["value"] = asyncio.run(run(action))
 
-        thread = threading.Thread(target=run, daemon=True)
+        thread = threading.Thread(target=run_in_thread, daemon=True)
         thread.start()
         thread.join()
         return result["value"]

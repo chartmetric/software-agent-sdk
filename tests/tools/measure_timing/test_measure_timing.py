@@ -12,7 +12,10 @@ from openhands.tools.measure_timing import (
     MeasureTimingAction,
     MeasureTimingExecutor,
 )
-from openhands.tools.measure_timing.definition import COLD_FIRST_RUN_RATIO
+from openhands.tools.measure_timing.definition import (
+    COLD_FIRST_RUN_RATIO,
+    TimingTarget,
+)
 
 
 class _SlowHandler(BaseHTTPRequestHandler):
@@ -336,3 +339,98 @@ def test_the_same_url_measures_once_the_session_is_supplied(auth_walled_server):
     assert observation.statuses == [200, 200, 200]
     assert all(45.0 < value < 5_000.0 for value in observation.durations_ms)
     assert "median" in observation.summary
+
+
+@pytest.fixture
+def two_servers():
+    """A slow side and a fast side, so attribution has something to get right."""
+    servers = []
+
+    def make(delay_seconds: float):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - stdlib naming
+                time.sleep(delay_seconds)
+                payload = b"ok"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, format: str, *args) -> None:  # noqa: A002
+                """Keep the test output clean."""
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return f"http://127.0.0.1:{server.server_port}/x"
+
+    yield make
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_comparison_names_which_side_the_cost_is_on(two_servers):
+    """A slow page is not a cause, and this is the step that turns it into one.
+
+    The production failure this addresses: a run measured the artists request at
+    18.463s, wrote that it was "a backend query/cache concern", and then changed
+    the frontend -- the side it had just shown was not the cost. Measuring is not
+    attributing, so the comparison does the attribution and says what follows from
+    it.
+    """
+    observation = MeasureTimingExecutor()(
+        MeasureTimingAction(
+            targets=[
+                TimingTarget(label="artists API", url=two_servers(0.40)),
+                TimingTarget(label="page document", url=two_servers(0.02)),
+            ],
+            repeat=3,
+            condition="warm cache, ages=65+",
+        )
+    )
+
+    assert observation.error is None
+    assert observation.target_kind == "comparison"
+    by_label = {row.label: row for row in observation.comparison}
+    assert by_label["artists API"].share_pct > 80
+    assert by_label["page document"].share_pct < 20
+
+    rendered = observation.summary
+    assert "artists API" in rendered
+    assert "warm cache, ages=65+" in rendered
+    assert "that is where the cost is" in rendered
+    assert "Changing anything else leaves it in place" in rendered
+
+
+def test_a_comparison_refuses_to_name_a_cause_it_cannot_see(two_servers):
+    """Two similar numbers single nothing out, and saying they do is the error."""
+    observation = MeasureTimingExecutor()(
+        MeasureTimingAction(
+            targets=[
+                TimingTarget(label="keywords API", url=two_servers(0.12)),
+                TimingTarget(label="subreddits API", url=two_servers(0.10)),
+            ],
+            repeat=3,
+        )
+    )
+
+    rendered = observation.summary
+    assert "No single target dominates" in rendered
+    assert "not supported by these numbers" in rendered
+    assert "that is where the cost is" not in rendered
+
+
+def test_a_comparison_needs_at_least_two_targets():
+    """One target is a measurement, not a comparison."""
+    with pytest.raises(ValidationError):
+        MeasureTimingAction(targets=[TimingTarget(label="only", url="http://x/")])
+    with pytest.raises(ValidationError):
+        MeasureTimingAction(
+            url="http://x/",
+            targets=[
+                TimingTarget(label="a", url="http://a/"),
+                TimingTarget(label="b", url="http://b/"),
+            ],
+        )
