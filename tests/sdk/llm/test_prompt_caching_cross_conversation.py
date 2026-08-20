@@ -264,3 +264,38 @@ def test_cross_conversation_cache_sharing(tmp_path, first_suffix, second_suffix)
 
     assert static_prompts[0] == static_prompts[1]
     assert dynamic_contexts[0] != dynamic_contexts[1]
+
+
+def test_an_empty_tool_message_does_not_end_the_conversation():
+    """REGRESSION: a tool result with no content must not raise.
+
+    The marker is written to `content[-1]` of the last user/tool message. A tool
+    whose observation renders to nothing produces a tool message with empty
+    content, and indexing into it raised IndexError out of `Conversation.run()` --
+    ending the whole conversation after the tool call had already succeeded.
+    Observed with a real tool that carried its result in its own fields and left
+    `content` empty. The marker must fall back to an earlier message instead,
+    which only shortens the cached prefix.
+    """
+    llm = LLM(
+        model="claude-sonnet-4-20250514",
+        api_key=SecretStr("test-key"),
+        usage_id="test",
+        caching_prompt=True,
+    )
+    assert llm.is_caching_prompt_active() is True
+
+    messages = [
+        Message(role="system", content=[TextContent(text="Static system prompt")]),
+        Message(role="user", content=[TextContent(text="Measure the report page")]),
+        Message(role="assistant", content=[TextContent(text="Measuring.")]),
+        Message(role="tool", content=[]),
+    ]
+
+    llm._apply_prompt_caching(messages)
+
+    # The empty tool message carries nothing and is simply skipped...
+    assert messages[3].content == []
+    # ...and the marker lands on the last message that can hold it.
+    assert messages[1].content[-1].cache_prompt is True
+    assert messages[0].content[0].cache_prompt is True
