@@ -148,3 +148,37 @@ class TestReconnectFailureNamesItsCause:
         assert "MCP Connection Failure" in observation.text
         assert "nesting counter" in observation.text
         assert "RuntimeError" in observation.text
+
+
+class TestReconnectBudgetIsBounded:
+    """A server that is genuinely gone must surface, not hang the turn.
+
+    The retries exist for a deploy cutover, which is short. If the budget were
+    unbounded -- or large -- a dead server would stall every tool call that met
+    it, and the cost would land inside the turn rather than once per turn.
+    """
+
+    def test_a_dead_server_fails_within_the_retry_budget(self):
+        from openhands.sdk.mcp.client import _RECONNECT_DELAYS_SECONDS, MCPClient
+
+        # Checked before the timing assertions, and against literals rather
+        # than against the constant itself. Without this a single immediate
+        # retry -- the behaviour this replaced -- makes the elapsed floor below
+        # `sum(...) * 0.8 == 0`, so the test passes while asserting nothing.
+        assert len(_RECONNECT_DELAYS_SECONDS) >= 3
+        assert sum(_RECONNECT_DELAYS_SECONDS) >= 3.0
+
+        dead_port = _find_free_port()  # nothing is listening on it
+        client = MCPClient(f"http://127.0.0.1:{dead_port}/mcp")
+
+        started = time.monotonic()
+        with pytest.raises(MCPError):
+            asyncio.run(client.connect())
+        elapsed = time.monotonic() - started
+
+        # It really backed off rather than spinning through its attempts.
+        assert elapsed >= 3.0
+        assert elapsed >= sum(_RECONNECT_DELAYS_SECONDS) * 0.8
+        # And it gave up. The ceiling is generous so a slow machine does not
+        # fail the test, but it still fails if the retries became unbounded.
+        assert elapsed < 30

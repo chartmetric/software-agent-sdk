@@ -18,6 +18,19 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Delay before each reconnection attempt. The first is immediate: a session that
+# died of the counter bug above is ready to be replaced at once, and waiting
+# would only slow the common case. The rest are sized to one specific event, a
+# deploy cutover -- Caddy repoints to an already-health-checked slot and the
+# previous one stops, so the gap is short and bounded, but not instantaneous. A
+# single immediate retry samples the one moment most likely to still be bad.
+#
+# Do not grow these. This is not a general retry policy: it is paid inside a tool
+# call, on every call that meets a dead session rather than once per turn, and it
+# competes with the turn's own budget. A server that is genuinely gone has to
+# surface as an error the agent can report, not hang the turn waiting for it.
+_RECONNECT_DELAYS_SECONDS = (0.0, 0.25, 1.0, 3.5)
+
 
 ToolsReconciledCallback = Callable[
     ["MCPClient", Sequence["MCPToolDefinition"]],
@@ -75,15 +88,21 @@ class MCPClient(AsyncMCPClient):
         minutes, across 11 consecutive calls.
 
         So a failed entry is followed by a forced disconnect -- which is what
-        resets the counter -- and one retry, before the failure is reported.
+        resets the counter -- and a bounded series of retries, before the
+        failure is reported.
         """
         try:
             await self.__aenter__()
+            return
         except RuntimeError as exc:
-            logger.info(
-                "MCP connect failed (%s); resetting session state and retrying once.",
-                exc,
-            )
+            last_exc: BaseException = exc
+
+        logger.info(
+            "MCP connect failed (%s); resetting session state and retrying.", last_exc
+        )
+        for delay in _RECONNECT_DELAYS_SECONDS:
+            if delay:
+                await asyncio.sleep(delay)
             try:
                 await self._disconnect(force=True)
             except Exception as disconnect_exc:
@@ -97,8 +116,10 @@ class MCPClient(AsyncMCPClient):
                 )
             try:
                 await self.__aenter__()
+                return
             except Exception as retry_exc:
-                raise MCPError("MCP Connection Failure") from retry_exc
+                last_exc = retry_exc
+        raise MCPError("MCP Connection Failure") from last_exc
 
     def call_async_from_sync(
         self,
