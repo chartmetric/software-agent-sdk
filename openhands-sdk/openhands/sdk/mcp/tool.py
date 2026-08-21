@@ -51,6 +51,21 @@ def to_camel_case(s: str) -> str:
     return "".join(word.capitalize() for word in parts if word)
 
 
+def _describe_exception(exc: BaseException) -> str:
+    """Render an exception together with the cause it was raised from.
+
+    ``MCPError("MCP Connection Failure")`` carries the real reason on
+    ``__cause__``; rendering only the wrapper throws it away and leaves the
+    reader with a message that says a connection failed and nothing else.
+    """
+    detail = str(exc) or type(exc).__name__
+    cause = exc.__cause__ or exc.__context__
+    if cause is None:
+        return detail
+    cause_detail = str(cause) or type(cause).__name__
+    return f"{detail} ({type(cause).__name__}: {cause_detail})"
+
+
 class MCPToolExecutor(ToolExecutor):
     """Executor for MCP tools."""
 
@@ -94,10 +109,14 @@ class MCPToolExecutor(ToolExecutor):
             try:
                 await self.client.connect()
             except Exception as exc:
+                # The wrapper alone ("MCP Connection Failure") names no cause,
+                # and this text is the only record the agent, the transcript,
+                # and the next reader ever see. Carry the underlying error with
+                # it, the way agent_server's MCP test route already does.
                 return MCPToolObservation.from_text(
                     text=(
                         f"MCP client not connected for tool '{self.tool_name}'. "
-                        f"Reconnection attempt failed: {exc}"
+                        f"Reconnection attempt failed: {_describe_exception(exc)}"
                     ),
                     is_error=True,
                     tool_name=self.tool_name,

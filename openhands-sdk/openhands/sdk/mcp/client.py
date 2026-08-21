@@ -7,12 +7,16 @@ from typing import TYPE_CHECKING, Any
 
 from fastmcp import Client as AsyncMCPClient
 
+from openhands.sdk.logger import get_logger
 from openhands.sdk.mcp.exceptions import MCPError
 from openhands.sdk.utils.async_executor import AsyncExecutor
 
 
 if TYPE_CHECKING:
     from openhands.sdk.mcp.tool import MCPToolDefinition
+
+
+logger = get_logger(__name__)
 
 
 ToolsReconciledCallback = Callable[
@@ -56,11 +60,45 @@ class MCPClient(AsyncMCPClient):
         return list(self._tools)
 
     async def connect(self) -> None:
-        """Establish connection to the MCP server."""
+        """Establish connection to the MCP server.
+
+        A session that dies on its own -- a transient 5xx from the server, a
+        dropped socket, a server restarted underneath us -- never runs
+        ``__aexit__``, so fastmcp's reentrancy counter is still above zero
+        while its session task has already finished. The next ``_connect()``
+        sees it must start a fresh session, finds the counter is not zero, and
+        refuses with ``RuntimeError("Internal error: nesting counter should be
+        0 ...")``. Nothing ever decrements it, so every later reconnect fails
+        the same way: one blip disables every MCP tool for the remainder of the
+        conversation. Measured in production, a single 502 during a deploy
+        cutover cost the run its publication tools for the following 15
+        minutes, across 11 consecutive calls.
+
+        So a failed entry is followed by a forced disconnect -- which is what
+        resets the counter -- and one retry, before the failure is reported.
+        """
         try:
             await self.__aenter__()
         except RuntimeError as exc:
-            raise MCPError("MCP Connection Failure") from exc
+            logger.info(
+                "MCP connect failed (%s); resetting session state and retrying once.",
+                exc,
+            )
+            try:
+                await self._disconnect(force=True)
+            except Exception as disconnect_exc:
+                # Awaiting the already-finished session task re-raises whatever
+                # killed it. That is the reason we are reconnecting, not a new
+                # problem, and the counter has already been reset by the time
+                # it is raised.
+                logger.debug(
+                    "Ignoring failure from the dead MCP session during reset: %s",
+                    disconnect_exc,
+                )
+            try:
+                await self.__aenter__()
+            except Exception as retry_exc:
+                raise MCPError("MCP Connection Failure") from retry_exc
 
     def call_async_from_sync(
         self,
