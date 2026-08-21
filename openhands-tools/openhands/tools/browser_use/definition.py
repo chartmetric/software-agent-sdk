@@ -965,7 +965,7 @@ class BrowserStartVideoRecordingAction(BrowserAction):
 
 
 BROWSER_START_VIDEO_RECORDING_DESCRIPTION = """Start recording the visible browser
-desktop to a WebM video file.
+window to a WebM video file.
 
 The browser must run in headed mode on an X11 display. Use this before exercising a
 user-visible interaction that needs video evidence, then call

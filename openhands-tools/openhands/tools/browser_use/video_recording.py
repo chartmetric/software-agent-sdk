@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import ctypes.util
 import os
 import shutil
 import signal
@@ -16,8 +18,75 @@ VIDEO_START_SETTLE_SECONDS = 0.75
 VIDEO_START_ERROR_MAX_CHARS = 500
 
 
+def _active_top_level_window_id(display_name: str) -> int:
+    """Return the X11 frame containing the currently focused browser widget."""
+    library_name = ctypes.util.find_library("X11")
+    if library_name is None:
+        raise RuntimeError("libX11 is unavailable")
+
+    x11 = ctypes.CDLL(library_name)
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XGetInputFocus.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_ulong),
+        ctypes.POINTER(ctypes.c_int),
+    ]
+    x11.XQueryTree.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.POINTER(ctypes.c_ulong),
+        ctypes.POINTER(ctypes.c_ulong),
+        ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong)),
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    x11.XQueryTree.restype = ctypes.c_int
+    x11.XFree.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+
+    display = x11.XOpenDisplay(display_name.encode())
+    if not display:
+        raise RuntimeError(f"could not open X11 display {display_name}")
+
+    try:
+        focused = ctypes.c_ulong()
+        revert_to = ctypes.c_int()
+        x11.XGetInputFocus(display, ctypes.byref(focused), ctypes.byref(revert_to))
+        root_window = x11.XDefaultRootWindow(display)
+        window = focused.value
+        if window in (0, 1, root_window):
+            raise RuntimeError("X11 has no focused window")
+
+        while True:
+            returned_root = ctypes.c_ulong()
+            parent = ctypes.c_ulong()
+            children = ctypes.POINTER(ctypes.c_ulong)()
+            child_count = ctypes.c_uint()
+            status = x11.XQueryTree(
+                display,
+                window,
+                ctypes.byref(returned_root),
+                ctypes.byref(parent),
+                ctypes.byref(children),
+                ctypes.byref(child_count),
+            )
+            if children:
+                x11.XFree(children)
+            if status == 0:
+                raise RuntimeError("could not inspect the focused X11 window")
+            if parent.value == root_window:
+                return window
+            if parent.value in (0, window):
+                raise RuntimeError("focused X11 window has no top-level frame")
+            window = parent.value
+    finally:
+        x11.XCloseDisplay(display)
+
+
 class BrowserVideoRecorder:
-    """Record the X11 desktop containing the headed browser to WebM."""
+    """Record the visible headed browser window to WebM."""
 
     def __init__(self, output_root: str | None) -> None:
         self._output_root = output_root
@@ -41,9 +110,10 @@ class BrowserVideoRecorder:
         if display is None:
             return "Error: DISPLAY is required for visible browser video recording"
 
-        geometry = os.getenv("VNC_GEOMETRY", "1280x800")
-        if not self._valid_geometry(geometry):
-            return f"Error: Invalid VNC_GEOMETRY value: {geometry}"
+        try:
+            window_id = _active_top_level_window_id(display)
+        except RuntimeError as exc:
+            return f"Error: Could not identify the visible browser window: {exc}"
 
         output_root = (
             Path(self._output_root)
@@ -70,8 +140,8 @@ class BrowserVideoRecorder:
                 "x11grab",
                 "-framerate",
                 "15",
-                "-video_size",
-                geometry,
+                "-window_id",
+                str(window_id),
                 "-i",
                 f"{display}.0",
                 "-an",
@@ -130,17 +200,6 @@ class BrowserVideoRecorder:
         if not output_path.is_file() or output_path.stat().st_size == 0:
             return "Error: Browser video recording did not produce a file"
         return f"Browser video recording saved: {output_path}"
-
-    @staticmethod
-    def _valid_geometry(geometry: str) -> bool:
-        width, separator, height = geometry.partition("x")
-        return (
-            separator == "x"
-            and width.isdigit()
-            and height.isdigit()
-            and int(width) > 0
-            and int(height) > 0
-        )
 
     @staticmethod
     def _format_start_error(stderr: bytes | None) -> str:

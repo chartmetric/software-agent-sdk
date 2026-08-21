@@ -9,7 +9,6 @@ from openhands.tools.browser_use.video_recording import BrowserVideoRecorder
 @pytest.mark.asyncio
 async def test_video_recorder_returns_absolute_webm_path(tmp_path, monkeypatch):
     monkeypatch.setenv("DISPLAY", ":1")
-    monkeypatch.setenv("VNC_GEOMETRY", "1280x800")
     process = MagicMock()
     process.returncode = None
     process.wait = AsyncMock(return_value=0)
@@ -23,6 +22,10 @@ async def test_video_recorder_returns_absolute_webm_path(tmp_path, monkeypatch):
     recorder = BrowserVideoRecorder(str(tmp_path))
     with (
         patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch(
+            "openhands.tools.browser_use.video_recording._active_top_level_window_id",
+            return_value=4242,
+        ),
         patch("asyncio.create_subprocess_exec", side_effect=create_process),
         patch("asyncio.sleep", new=AsyncMock()),
     ):
@@ -34,6 +37,52 @@ async def test_video_recorder_returns_absolute_webm_path(tmp_path, monkeypatch):
     assert str(output_path.resolve()) in start_result
     assert str(output_path.resolve()) in stop_result
     process.send_signal.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_video_recorder_captures_only_the_active_browser_window(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DISPLAY", ":1")
+    process = MagicMock()
+    process.returncode = None
+
+    recorder = BrowserVideoRecorder(str(tmp_path))
+    with (
+        patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch(
+            "openhands.tools.browser_use.video_recording._active_top_level_window_id",
+            return_value=4242,
+        ),
+        patch("asyncio.create_subprocess_exec", return_value=process) as create_process,
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        await recorder.start()
+
+    assert create_process.await_args is not None
+    args = create_process.await_args.args
+    assert args[args.index("-window_id") + 1] == "4242"
+    assert "-video_size" not in args
+
+
+@pytest.mark.asyncio
+async def test_video_recorder_requires_an_active_browser_window(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":1")
+    recorder = BrowserVideoRecorder(str(tmp_path))
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch(
+            "openhands.tools.browser_use.video_recording._active_top_level_window_id",
+            side_effect=RuntimeError("X11 has no focused window"),
+        ),
+    ):
+        result = await recorder.start()
+
+    assert (
+        result == "Error: Could not identify the visible browser window: "
+        "X11 has no focused window"
+    )
 
 
 @pytest.mark.asyncio
@@ -68,6 +117,10 @@ async def test_video_recorder_restores_external_process_library_path(
     recorder = BrowserVideoRecorder(str(tmp_path))
     with (
         patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch(
+            "openhands.tools.browser_use.video_recording._active_top_level_window_id",
+            return_value=4242,
+        ),
         patch("asyncio.create_subprocess_exec", return_value=process) as create_process,
         patch("asyncio.sleep", new=AsyncMock()),
     ):
@@ -97,6 +150,10 @@ async def test_video_recorder_retries_transient_ffmpeg_start_failure(
     with (
         patch("shutil.which", return_value="/usr/bin/ffmpeg"),
         patch(
+            "openhands.tools.browser_use.video_recording._active_top_level_window_id",
+            return_value=4242,
+        ),
+        patch(
             "asyncio.create_subprocess_exec",
             side_effect=[failed_process, running_process],
         ) as create_process,
@@ -122,6 +179,10 @@ async def test_video_recorder_reports_bounded_ffmpeg_start_error(tmp_path, monke
     recorder = BrowserVideoRecorder(str(tmp_path))
     with (
         patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch(
+            "openhands.tools.browser_use.video_recording._active_top_level_window_id",
+            return_value=4242,
+        ),
         patch("asyncio.create_subprocess_exec", side_effect=failed_processes),
         patch("asyncio.sleep", new=AsyncMock()),
     ):
@@ -144,6 +205,10 @@ async def test_video_recorder_terminates_process_after_timeout(tmp_path, monkeyp
     recorder = BrowserVideoRecorder(str(tmp_path))
     with (
         patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch(
+            "openhands.tools.browser_use.video_recording._active_top_level_window_id",
+            return_value=4242,
+        ),
         patch("asyncio.create_subprocess_exec", return_value=process),
         patch("asyncio.sleep", new=AsyncMock()),
     ):
