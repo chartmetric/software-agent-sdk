@@ -898,7 +898,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         return await self._server._stop_recording()
 
     async def start_video_recording(self) -> str:
-        """Start recording the visible browser desktop to WebM."""
+        """Start recording the visible browser window to WebM."""
         await self._ensure_initialized()
         return await self._video_recorder.start()
 
