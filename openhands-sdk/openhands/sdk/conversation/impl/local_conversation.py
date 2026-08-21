@@ -333,8 +333,7 @@ class LocalConversation(BaseConversation):
             if new_tools:
                 agent = agent.model_copy(update={"tools": [*agent.tools, *new_tools]})
 
-        if agent is not None:
-            self.agent = agent
+        self.agent = agent  # pyright: ignore[reportAttributeAccessIssue]
         if isinstance(workspace, (str, Path)):
             # LocalWorkspace accepts both str and Path via BeforeValidator
             workspace = LocalWorkspace(working_dir=workspace)
