@@ -644,6 +644,37 @@ class TestEventServiceSearchEvents:
         assert result.items[4].id == "event5"
 
 
+class TestEventServiceGetEvent:
+    """Test cases for EventService.get_event / batch_get_events."""
+
+    @pytest.mark.asyncio
+    async def test_an_id_the_log_does_not_hold_reads_as_a_miss(self, event_service):
+        """A caller-assigned id is an existence probe, so a miss is not a fault.
+
+        ``EventLog.get_index`` raises ``KeyError`` for an unknown id. Letting
+        that escape made the route answer 500 where it documents 404, and
+        failed a whole batch instead of returning null for the one entry.
+        """
+        fs = InMemoryFileStore()
+        stored = _message_event(
+            "00000000-0000-0000-0000-000000000001",
+            "stored",
+            "2026-06-16T09:00:00",
+        )
+        fs.write(
+            f"events/event-00000-{stored.id}.json",
+            stored.model_dump_json(exclude_none=True),
+        )
+        _attach_event_log(event_service, EventLog(fs))
+        missing_id = "00000000-0000-0000-0000-00000000dead"
+
+        assert await event_service.get_event(missing_id) is None
+        assert await event_service.batch_get_events([stored.id, missing_id]) == [
+            stored,
+            None,
+        ]
+
+
 class TestEventServiceCountEvents:
     """Test cases for EventService.count_events method."""
 

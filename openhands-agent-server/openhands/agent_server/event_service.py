@@ -391,11 +391,23 @@ class EventService:
         Reads directly from the EventLog without acquiring the state lock.
         EventLog reads are safe without the FIFOLock because events are
         append-only and immutable once written.
+
+        An id the log does not hold is a miss, not a fault: ``get_index``
+        raises ``KeyError`` for it, and letting that escape made the two
+        callers contradict what they document. ``GET /events/{event_id}``
+        never reached its ``None -> 404`` branch and answered 500 instead,
+        and ``batch_get_events`` failed the whole batch rather than
+        returning null for the missing entry. A client using the read as an
+        existence probe -- the point of a caller-assigned event id -- then
+        could not tell an absent event from a broken server.
         """
         if not self._conversation:
             raise ValueError("inactive_service")
         events = self._conversation._state.events
-        index = events.get_index(event_id)
+        try:
+            index = events.get_index(event_id)
+        except KeyError:
+            return None
         return events[index]
 
     async def get_event(self, event_id: str) -> Event | None:
