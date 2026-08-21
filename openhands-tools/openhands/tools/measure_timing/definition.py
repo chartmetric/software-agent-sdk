@@ -703,7 +703,7 @@ class MeasureTimingExecutor(
             loop = None
         run = self._measure_targets if action.targets else self._measure
         if loop is None:
-            return asyncio.run(run(action))
+            return _with_readable_content(asyncio.run(run(action)))
         # Called from inside a running loop: hand the work to a private one so the
         # blocking tool contract still holds.
         result: dict[str, MeasureTimingObservation] = {}
@@ -714,7 +714,31 @@ class MeasureTimingExecutor(
         thread = threading.Thread(target=run_in_thread, daemon=True)
         thread.start()
         thread.join()
-        return result["value"]
+        return _with_readable_content(result["value"])
+
+
+def _with_readable_content(
+    observation: MeasureTimingObservation,
+) -> MeasureTimingObservation:
+    """Put the durations in `content`, where every reader looks.
+
+    The observation carried its result in its own typed fields and left `content`
+    empty, so the numbers existed only for something that knew to read
+    `comparison` and `median_ms`. Two consequences, both observed: the LLM message
+    was built from an empty list until `to_llm_content` was overridden to paper
+    over it, and the chat transcript showed a tool card with nothing in it, so a
+    run that measured seven targets looked -- to the person reading the session --
+    like a run that measured nothing. The numbers were in the event log the whole
+    time, which is not the same as being visible.
+
+    Set once here rather than at each construction site, because `summary` is
+    computed from the finished object.
+    """
+    if observation.content:
+        return observation
+    return observation.model_copy(
+        update={"content": [TextContent(text=observation.summary)]}
+    )
 
 
 class MeasureTimingTool(ToolDefinition[MeasureTimingAction, MeasureTimingObservation]):

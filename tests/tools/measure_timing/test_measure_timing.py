@@ -513,3 +513,34 @@ def test_a_comparison_where_nothing_answered_does_not_read_as_a_comparison():
         ],
     )
     assert "a is 74% of the total" in served.summary
+
+
+def test_the_durations_are_in_content_where_a_reader_finds_them(slow_server):
+    """The observation carried its result only in fields nobody generic reads.
+
+    `content` was empty, so the numbers existed for anything that knew to read
+    `comparison` and `median_ms` and for nothing else. Two consequences, both
+    observed: the LLM message was built from an empty list until `to_llm_content`
+    was overridden to cover it, and the chat transcript showed a tool card with
+    nothing in it -- a run that measured seven targets looked, to the person
+    reading the session, like a run that had measured nothing.
+    """
+    observation = MeasureTimingExecutor()(
+        MeasureTimingAction(
+            targets=[
+                TimingTarget(label="fast", url=slow_server),
+                TimingTarget(label="also", url=slow_server),
+            ],
+            repeat=3,
+            condition="warm, local",
+        )
+    )
+
+    serialized = observation.model_dump(mode="json")
+    assert len(serialized["content"]) == 1
+    text = serialized["content"][0]["text"]
+    # The same text the LLM is given, so the two readers cannot diverge.
+    assert text == observation.summary
+    assert "fast" in text and "also" in text
+    assert "ms" in text
+    assert "% of the measured total" in text
