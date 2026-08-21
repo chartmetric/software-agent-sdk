@@ -197,7 +197,6 @@ async def test_start_conversation_with_plugins_list(conversation_service, tmp_pa
             mock_event_service.get_state.return_value = mock_state
             mock_event_service.stored = StoredConversation(
                 id=mock_state.id,
-                agent=request.agent,
                 **request.model_dump(exclude={"agent"}),
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -212,7 +211,8 @@ async def test_start_conversation_with_plugins_list(conversation_service, tmp_pa
             assert len(stored.plugins) == 1
             assert stored.plugins[0].source == str(plugin_dir)
             # Agent context NOT populated yet (lazy loading in LocalConversation)
-            assert stored.agent.agent_context is None
+            agent = mock_event_service_class.call_args.kwargs["agent"]
+            assert agent.agent_context is None
 
 
 @pytest.mark.asyncio

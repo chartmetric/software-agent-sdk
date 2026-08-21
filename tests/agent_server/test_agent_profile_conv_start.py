@@ -536,8 +536,8 @@ async def _start_from_profile(
     profile: OpenHandsAgentProfile | ACPAgentProfile,
     resolved_settings: OpenHandsAgentSettings | ACPAgentSettings,
     persisted_settings: PersistedSettings,
-) -> StoredConversation:
-    """Launch from ``profile`` and return the captured ``StoredConversation``.
+) -> tuple[StoredConversation, Any]:
+    """Launch from ``profile`` and return its metadata and runtime Agent.
 
     Only the stores are stubbed, so ``_resolve_agent_from_profile`` and the
     settings read that feeds it both run for real — this is the path a client
@@ -549,12 +549,14 @@ async def _start_from_profile(
     )
     captured: dict[str, Any] = {}
 
-    async def capture_start(stored, **_kwargs):
+    async def capture_start(stored, **kwargs):
+        agent = kwargs["agent"]
         captured["stored"] = stored
+        captured["agent"] = agent
         event_service = AsyncMock(spec=EventService)
         event_service.get_state.return_value = ConversationState(
             id=uuid4(),
-            agent=stored.agent,
+            agent=agent,
             workspace=request.workspace,
             execution_status=ConversationExecutionStatus.IDLE,
         )
@@ -598,7 +600,7 @@ async def _start_from_profile(
         MockStore.return_value.load.return_value = profile
         await service.start_conversation(request)
 
-    return captured["stored"]
+    return captured["stored"], captured["agent"]
 
 
 class TestConversationServiceStartFromProfile:
@@ -649,8 +651,9 @@ class TestConversationServiceStartFromProfile:
                     parent_conversation_id=None,
                 )
 
-                async def capture_start(stored, **_kwargs):
+                async def capture_start(stored, **kwargs):
                     captured["stored"] = stored
+                    captured["agent"] = kwargs["agent"]
                     return mock_es
 
                 mock_ses.side_effect = capture_start
@@ -662,8 +665,7 @@ class TestConversationServiceStartFromProfile:
         assert stored.launched_agent_profile is not None
         assert stored.launched_agent_profile.agent_profile_id == profile_id
         assert stored.launched_agent_profile.revision == 5
-        # The resolved agent (not None) must be present
-        assert stored.agent is not None
+        assert captured["agent"] is not None
 
     @pytest.mark.asyncio
     async def test_profile_not_found_propagates(self, tmp_path):
@@ -718,12 +720,12 @@ class TestConversationServiceStartFromProfile:
             )
         )
 
-        stored = await _start_from_profile(
+        _, agent = await _start_from_profile(
             tmp_path, profile, resolved_settings, persisted
         )
 
-        assert stored.agent.agent_context is not None
-        assert stored.agent.agent_context.load_memory is True
+        assert agent.agent_context is not None
+        assert agent.agent_context.load_memory is True
 
     @pytest.mark.parametrize(
         "persisted_settings",
@@ -749,12 +751,12 @@ class TestConversationServiceStartFromProfile:
     ):
         profile, resolved_settings = _resolved_settings_for("openhands")
 
-        stored = await _start_from_profile(
+        _, agent = await _start_from_profile(
             tmp_path, profile, resolved_settings, persisted_settings
         )
 
-        assert stored.agent.agent_context is not None
-        assert stored.agent.agent_context.load_memory is False
+        assert agent.agent_context is not None
+        assert agent.agent_context.load_memory is False
 
 
 # ---------------------------------------------------------------------------

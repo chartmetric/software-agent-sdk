@@ -666,6 +666,10 @@ class ConversationService:
             base_state_file.read_text(), context=context
         )
 
+    def _agent_from_base_state(self, conversation_id: UUID) -> AgentBase | None:
+        state = self._load_persisted_state_sync(conversation_id)
+        return state.agent if state is not None else None
+
     def _children_index(self) -> dict[UUID, list[UUID]]:
         """Reverse map parent_id -> child ids; rebuilt per call because the
         catalog is mutated from several places and a cache could go stale."""
@@ -751,11 +755,14 @@ class ConversationService:
     async def _resolve_credential_bindings(
         self,
         stored: StoredConversation,
+        agent: AgentBase | None = None,
     ) -> dict[str, VersionedCredentialBinding]:
+        if agent is None:
+            agent = await asyncio.to_thread(self._agent_from_base_state, stored.id)
         bindings = self._credential_bindings.pop(stored.id, {})
         if (
             CODEX_AUTH_SECRET_NAME not in bindings
-            and self._is_codex_agent(stored.agent)
+            and self._is_codex_agent(agent)
             and await self._has_local_codex_credential()
         ):
             assert self.secrets_store is not None
@@ -1203,13 +1210,14 @@ class ConversationService:
                     existing_event_service is not None
                     and existing_event_service.is_open()
                 ):
+                    existing_agent = existing_event_service.get_conversation().agent
                     if (
-                        self._is_codex_agent(existing_event_service.stored.agent)
+                        self._is_codex_agent(existing_agent)
                         and CODEX_AUTH_SECRET_NAME
                         not in existing_event_service.credential_bindings
                     ):
                         late_bindings = await self._resolve_credential_bindings(
-                            existing_event_service.stored
+                            existing_event_service.stored, agent=existing_agent
                         )
                         try:
                             for secret_name, binding in late_bindings.items():
@@ -1255,9 +1263,10 @@ class ConversationService:
                     raise ValueError(
                         f"Persisted conversation {conversation_id} has no record"
                     )
-                managed_codex_credential = self._is_codex_agent(
-                    existing_record.stored.agent
-                ) and (
+                reattach_agent = await asyncio.to_thread(
+                    self._agent_from_base_state, conversation_id
+                )
+                managed_codex_credential = self._is_codex_agent(reattach_agent) and (
                     CODEX_AUTH_SECRET_NAME
                     in self._credential_bindings.get(conversation_id, {})
                     or await self._has_local_codex_credential()
@@ -1444,6 +1453,8 @@ class ConversationService:
             context={"expose_secrets": True},
             exclude={"agent_profile_id", "agent_launch_additions"},
         )
+        agent_payload = request_data.pop("agent", None)
+        new_agent: AgentBase = request.agent
 
         # If secrets_encrypted=True, the agent's secrets (e.g., LLM api_key) are
         # cipher-encrypted and need decryption during model validation. Pass the
@@ -1454,6 +1465,10 @@ class ConversationService:
                     "Cannot decrypt secrets: cipher not configured. "
                     "Set OH_SECRET_KEY environment variable."
                 )
+            agent_cls = type(request.agent)
+            new_agent = agent_cls.model_validate(
+                agent_payload, context={"cipher": self.cipher}
+            )
             stored = StoredConversation.model_validate(
                 {
                     "id": conversation_id,
@@ -1474,7 +1489,7 @@ class ConversationService:
             )
         async with self._lifecycle_lock:
             event_service = await self._start_event_service(
-                stored, is_new_conversation=True
+                stored, is_new_conversation=True, agent=new_agent
             )
         initial_message = request.initial_message
         if initial_message:
@@ -1736,7 +1751,6 @@ class ConversationService:
         # to re-register its tools after a server restart.
         fork_overrides: dict[str, Any] = {
             "id": fork_conv_id,
-            "agent": fork_agent,
             "workspace": fork_workspace,
             "title": title,
             "created_at": utc_now(),
@@ -1755,7 +1769,7 @@ class ConversationService:
         try:
             async with self._lifecycle_lock:
                 fork_event_service = await self._start_event_service(
-                    fork_stored, is_new_conversation=True
+                    fork_stored, is_new_conversation=True, agent=fork_agent
                 )
         except Exception:
             safe_rmtree(fork_dir)
@@ -2021,16 +2035,23 @@ class ConversationService:
         )
 
     async def _start_event_service(
-        self, stored: StoredConversation, *, is_new_conversation: bool = False
+        self,
+        stored: StoredConversation,
+        *,
+        is_new_conversation: bool = False,
+        agent: AgentBase | None = None,
     ) -> EventService:
         event_services = self._event_services
         if event_services is None:
             raise ValueError("inactive_service")
 
-        credential_bindings = await self._resolve_credential_bindings(stored)
+        credential_bindings = await self._resolve_credential_bindings(
+            stored, agent=agent
+        )
         event_service = EventService(
             stored=stored,
             conversations_dir=self.conversations_dir,
+            agent=agent,
             cipher=self.cipher,
             mcp_tool_provider=self.mcp_tool_provider,
             credential_bindings=credential_bindings,
@@ -2136,11 +2157,21 @@ class ConversationService:
             if factory is None:
                 return
 
+            live_conversation = getattr(event_service, "_conversation", None)
+            live_agent = (
+                live_conversation.agent
+                if live_conversation is not None
+                else stored.agent
+            )
             subscriber = TelemetrySubscriber(
                 conversation_id=stored.id,
                 sink=sink,
                 factory=factory,
-                context=_build_telemetry_context(stored, factory),
+                context=_build_telemetry_context(
+                    stored,
+                    factory,
+                    agent=live_agent,
+                ),
             )
             await event_service.subscribe_to_events(subscriber)
             if is_new_conversation:
@@ -2150,29 +2181,33 @@ class ConversationService:
 
 
 def _build_telemetry_context(
-    stored: StoredConversation, factory: DiagnosticEventFactory
+    stored: StoredConversation,
+    factory: DiagnosticEventFactory,
+    agent: AgentBase | None = None,
 ) -> ConversationTelemetryContext:
     """Reduce a stored conversation to its sanitized telemetry facts.
 
     Every read is defensive: a shape change upstream should degrade a property
     to ``unknown``, never raise into conversation startup.
     """
-    agent = getattr(stored, "agent", None)
-    llm = getattr(agent, "llm", None)
+    resolved_agent = agent or stored.agent
+    llm = getattr(resolved_agent, "llm", None)
 
     workspace = getattr(stored, "workspace", None)
     workspace_kind = safe_token(
         type(workspace).__name__.lower() if workspace is not None else None
     )
 
-    tools = getattr(agent, "tools", None)
+    tools = getattr(resolved_agent, "tools", None)
     tool_count = len(tools) if isinstance(tools, (list, tuple)) else 0
 
     return ConversationTelemetryContext(
         conversation_ref=factory.conversation_ref(stored.id),
         user_id=getattr(stored, "user_id", None),
         llm_model_family=model_family(getattr(llm, "model", None)),
-        agent_kind=safe_token(type(agent).__name__.lower() if agent else None),
+        agent_kind=safe_token(
+            type(resolved_agent).__name__.lower() if resolved_agent else None
+        ),
         tool_count=tool_count,
         is_fork=getattr(stored, "forked_from_conversation_id", None) is not None,
         has_agent_profile=getattr(stored, "launched_agent_profile", None) is not None,

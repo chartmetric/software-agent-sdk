@@ -1,17 +1,23 @@
 """Idle-conversation eviction in ``ConversationService`` (OSS-1495)."""
 
 import asyncio
+import copy
+import json
 import time
+from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
 from openhands.agent_server.conversation_service import ConversationService
 from openhands.agent_server.models import StartConversationRequest
 from openhands.agent_server.pub_sub import Subscriber
 from openhands.sdk import LLM, Agent, Event
 from openhands.sdk.credential import ResolvedCredential
+from openhands.sdk.llm import Message, TextContent
 from openhands.sdk.security.confirmation_policy import NeverConfirm
 from openhands.sdk.workspace import LocalWorkspace
+from tests.conftest import create_mock_litellm_response
 
 
 def _make_request(workspace_dir) -> StartConversationRequest:
@@ -94,6 +100,116 @@ async def test_idle_conversation_is_evicted_and_rehydrated(tmp_path):
         assert rehydrated is not None
         assert rehydrated is not event_service
         assert conversation_id in service._event_services
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rehydration_mode", ["idle-eviction", "service-restart"])
+async def test_first_llm_call_after_rehydration_preserves_cache_prefix(
+    tmp_path, monkeypatch, rehydration_mode
+):
+    """The first call after runtime loss must reuse the warm cache prefix."""
+    conversations_dir = tmp_path / "conversations"
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    request = StartConversationRequest(
+        agent=Agent(
+            llm=LLM(
+                model="openrouter/openai/gpt-5.6-sol",
+                api_key=SecretStr("unused"),
+                api_mode="chat",
+                prompt_cache_retention=None,
+                usage_id="test-llm",
+            ),
+            tools=[],
+        ),
+        workspace=LocalWorkspace(working_dir=str(workspace_dir)),
+        confirmation_policy=NeverConfirm(),
+        autotitle=False,
+    )
+    provider_requests: list[dict[str, Any]] = []
+
+    async def fake_acompletion(**kwargs):
+        provider_requests.append(copy.deepcopy(kwargs))
+        return create_mock_litellm_response(
+            content=f"reply-{len(provider_requests)}",
+            response_id=f"response-{len(provider_requests)}",
+            model=kwargs["model"],
+        )
+
+    async def run_turn(event_service, text: str) -> None:
+        await event_service.send_message(
+            Message(role="user", content=[TextContent(text=text)]),
+            run=True,
+        )
+        for _ in range(100):
+            if event_service._run_task is None:
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("conversation run did not finish")
+
+    monkeypatch.setattr("openhands.sdk.llm.llm.litellm_acompletion", fake_acompletion)
+
+    async with ConversationService(
+        conversations_dir=conversations_dir,
+        conversation_idle_ttl_seconds=1800,
+    ) as service:
+        info, _ = await service.start_conversation(request)
+        conversation_id = info.id
+        assert service._event_services is not None
+        event_service = service._event_services[conversation_id]
+        assert event_service._conversation is not None
+
+        cache_llm = event_service._conversation.agent.llm.model_copy(
+            update={"prompt_cache_retention": "24h"}
+        )
+        event_service._conversation.switch_llm(cache_llm)
+
+        await run_turn(event_service, "cache anchor " * 2048)
+        await run_turn(event_service, "warm follow-up")
+        assert len(provider_requests) == 2
+        warm_request = provider_requests[-1]
+        meta = json.loads(
+            (conversations_dir / conversation_id.hex / "meta.json").read_text()
+        )
+        assert "agent" not in meta
+        meta["agent"] = request.agent.model_dump(
+            mode="json", context={"expose_secrets": True}
+        )
+        (conversations_dir / conversation_id.hex / "meta.json").write_text(
+            json.dumps(meta)
+        )
+
+        if rehydration_mode == "idle-eviction":
+            event_service._last_active_monotonic = time.monotonic() - 10_000
+            await service._evict_idle_conversations(1800)
+            assert conversation_id not in service._event_services
+
+            rehydrated = await service.get_event_service(conversation_id)
+            assert rehydrated is not None
+            assert rehydrated is not event_service
+            await run_turn(rehydrated, "resumed follow-up")
+
+    if rehydration_mode == "service-restart":
+        async with ConversationService(
+            conversations_dir=conversations_dir,
+            conversation_idle_ttl_seconds=1800,
+        ) as restarted_service:
+            rehydrated = await restarted_service.get_event_service(conversation_id)
+            assert rehydrated is not None
+            await run_turn(rehydrated, "resumed follow-up")
+
+    assert len(provider_requests) == 3
+    resumed_request = provider_requests[-1]
+    expected_cache_key = str(conversation_id)
+    assert warm_request["prompt_cache_key"] == expected_cache_key
+    assert resumed_request["prompt_cache_key"] == expected_cache_key
+    assert resumed_request["model"] == warm_request["model"]
+    assert resumed_request.get("prompt_cache_retention") == "24h"
+    assert resumed_request.get("tools") == warm_request.get("tools")
+    assert (
+        resumed_request["messages"][: len(warm_request["messages"])]
+        == (warm_request["messages"])
+    )
 
 
 @pytest.mark.asyncio

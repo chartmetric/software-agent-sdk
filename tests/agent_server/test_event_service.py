@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import shutil
 import threading
 import time
@@ -1834,19 +1835,10 @@ class TestEventServiceSaveMeta:
         assert env["TAVILY_API_KEY"].get_secret_value() == "${TAVILY_API_KEY}"
 
     @pytest.mark.asyncio
-    async def test_switch_acp_model_persists_to_meta(self, tmp_path):
-        """switch_acp_model mirrors the new model into meta.json.
-
-        start() rebuilds the runtime agent from meta.json (self.stored.agent),
-        and ConversationState.create() copies that agent over the persisted
-        base_state.json on resume. So the switched model must also be written
-        to meta.json, otherwise a restart silently reverts to the old model.
-        """
-        from openhands.sdk.agent import ACPAgent
-
+    async def test_switch_acp_model_does_not_persist_agent_to_meta(self, tmp_path):
+        """The SDK conversation persists the switched agent to base_state.json."""
         stored = StoredConversation(
             id=uuid4(),
-            agent=ACPAgent(acp_command=["echo", "test"], acp_model="old-model"),
             workspace=LocalWorkspace(working_dir=str(tmp_path)),
             confirmation_policy=NeverConfirm(),
             initial_message=None,
@@ -1855,25 +1847,17 @@ class TestEventServiceSaveMeta:
         service = EventService(stored=stored, conversations_dir=tmp_path)
         conv_dir = tmp_path / stored.id.hex
         conv_dir.mkdir(parents=True, exist_ok=True)
+        await service.save_meta()
+        meta_file = conv_dir / "meta.json"
+        assert "agent" not in json.loads(meta_file.read_text())
 
-        # Stand in for a live conversation; the protocol-level switch is
-        # covered elsewhere — here we only assert the meta.json mirroring.
+        # Protocol-level switching and base-state autosave are covered by SDK tests.
         service._conversation = MagicMock()
 
         await service.switch_acp_model("new-model")
 
-        # Live switch was delegated to the conversation...
         service._conversation.switch_acp_model.assert_called_once_with("new-model")
-        # ...the in-memory stored agent was updated...
-        assert isinstance(service.stored.agent, ACPAgent)
-        assert service.stored.agent.acp_model == "new-model"
-        # ...and the new model was persisted to meta.json so it survives a
-        # restart.
-        loaded = StoredConversation.model_validate_json(
-            (conv_dir / "meta.json").read_text()
-        )
-        assert isinstance(loaded.agent, ACPAgent)
-        assert loaded.agent.acp_model == "new-model"
+        assert "agent" not in json.loads(meta_file.read_text())
 
     @pytest.mark.asyncio
     async def test_switch_acp_model_inactive_service_raises_value_error(self, tmp_path):

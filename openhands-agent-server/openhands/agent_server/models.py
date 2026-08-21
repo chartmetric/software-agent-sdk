@@ -18,6 +18,7 @@ from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.conversation_stats import ConversationStats
 from openhands.sdk.conversation.request import (  # re-export for backward compat
     ACPEnabledAgent as ACPEnabledAgent,
+    ConversationConfig as ConversationConfig,
     SendMessageRequest as SendMessageRequest,
     StartACPConversationRequest as StartACPConversationRequest,
     StartConversationRequest as StartConversationRequest,
@@ -80,15 +81,16 @@ class EventSortOrder(StrEnum):
     TIMESTAMP_DESC = "TIMESTAMP_DESC"
 
 
-class StoredConversation(StartConversationRequest):
+class StoredConversation(ConversationConfig):
     """Stored details about a conversation.
 
-    Extends StartConversationRequest with server-assigned fields.
+    Agent state is excluded because ``base_state.json`` is its sole durable source.
     """
 
-    # agent_profile_id is resolved into launched_agent_profile at creation; exclude from
-    # the persistence payload so it does not re-appear in meta.json.
-    agent_profile_id: UUID | None = Field(default=None, exclude=True)
+    # Launch-only compatibility for direct EventService/StoredConversation
+    # embedders. Exclusion is load-bearing: meta.json must never regain a second
+    # durable Agent copy, and resume ignores this field in favor of base_state.
+    agent: AgentBase | None = Field(default=None, exclude=True)
     required_runtime_credential_bindings: set[str] = Field(default_factory=set)
 
     id: OpenHandsUUID
