@@ -193,7 +193,7 @@ class LocalConversation(BaseConversation):
 
     def __init__(
         self,
-        agent: AgentBase,
+        agent: AgentBase | None,
         workspace: str | Path | LocalWorkspace,
         plugins: list[PluginSource] | None = None,
         persistence_dir: str | Path | None = None,
@@ -314,11 +314,15 @@ class LocalConversation(BaseConversation):
         # from the persisted agent's tool specs — mirroring the server resume
         # path so a fresh process can re-register the dynamic tools.
         resolved_client_tools = list(client_tools or [])
-        if not resolved_client_tools and persistence_dir is not None:
+        if (
+            agent is not None
+            and not resolved_client_tools
+            and persistence_dir is not None
+        ):
             resolved_client_tools = self._recover_persisted_client_tools(
                 persistence_dir, desired_id
             )
-        if resolved_client_tools:
+        if agent is not None and resolved_client_tools:
             from openhands.sdk.tool.client_tool import register_client_tools
 
             client_tool_specs = register_client_tools(resolved_client_tools)
@@ -329,7 +333,7 @@ class LocalConversation(BaseConversation):
             if new_tools:
                 agent = agent.model_copy(update={"tools": [*agent.tools, *new_tools]})
 
-        self.agent = agent
+        self.agent = agent  # pyright: ignore[reportAttributeAccessIssue]
         if isinstance(workspace, (str, Path)):
             # LocalWorkspace accepts both str and Path via BeforeValidator
             workspace = LocalWorkspace(working_dir=workspace)
@@ -353,6 +357,17 @@ class LocalConversation(BaseConversation):
             cipher=cipher,
             tags=tags,
         )
+
+        if agent is None:
+            self.agent = self._state.agent
+            from openhands.sdk.tool.client_tool import (
+                extract_client_tool_specs,
+                register_client_tools,
+            )
+
+            recovered_specs = extract_client_tool_specs(self.agent.tools)
+            if recovered_specs:
+                register_client_tools(recovered_specs)
 
         self._bind_conversation_context(self.agent.llm)
 
@@ -2490,6 +2505,16 @@ class LocalConversation(BaseConversation):
         with self._state:
             self._state.confirmation_policy = policy
         logger.info(f"Confirmation policy set to: {policy}")
+
+    def set_token_callbacks(
+        self, token_callbacks: list[ConversationTokenCallbackType] | None
+    ) -> None:
+        """Replace token callbacks after a persisted agent has been loaded."""
+        self._on_token = (
+            BaseConversation.compose_callbacks(token_callbacks)
+            if token_callbacks
+            else None
+        )
 
     def reject_pending_actions(self, reason: str = "User rejected the action") -> None:
         """Reject all pending actions from the agent.

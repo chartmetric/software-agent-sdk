@@ -103,15 +103,8 @@ class AgentLaunchAdditions(BaseModel):
     )
 
 
-class StartConversationRequest(BaseModel):
-    """Payload to create a new conversation.
-
-    Supports any concrete :class:`AgentBase` implementation, including regular
-    OpenHands agents and ACP agents. Clients may provide either a concrete
-    ``agent`` payload or an ``agent_settings`` payload; when ``agent_settings``
-    is provided without ``agent``, the settings are validated with the
-    ``agent_kind`` discriminator and converted to the appropriate agent type.
-    """
+class ConversationConfig(BaseModel):
+    """Shared conversation configuration, excluding the runtime agent."""
 
     workspace: LocalWorkspace = Field(
         ...,
@@ -288,6 +281,14 @@ class StartConversationRequest(BaseModel):
             "the agent's LLM."
         ),
     )
+
+
+class StartConversationRequest(ConversationConfig):
+    """Payload to create a conversation with an agent specification.
+
+    The agent belongs to the launch request only. Durable runtime agent state is
+    persisted by ``ConversationState`` rather than duplicated in server metadata.
+    """
 
     agent_settings: dict[str, Any] | None = Field(
         default=None,

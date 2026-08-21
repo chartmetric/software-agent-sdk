@@ -115,6 +115,7 @@ class EventService:
 
     stored: StoredConversation
     conversations_dir: Path
+    agent: AgentBase | None = None
     cipher: Cipher | None = None
     mcp_tool_provider: MCPToolProvider | None = None
     credential_bindings: dict[str, VersionedCredentialBinding] = field(
@@ -181,15 +182,7 @@ class EventService:
     def _without_stored_secret(self, secret_name: str) -> StoredConversation:
         secrets = dict(self.stored.secrets)
         secrets.pop(secret_name, None)
-        return self.stored.model_copy(
-            update={
-                "secrets": secrets,
-                "agent": _without_agent_context_secret(
-                    self.stored.agent,
-                    secret_name,
-                ),
-            }
-        )
+        return self.stored.model_copy(update={"secrets": secrets})
 
     async def _scrub_persisted_credentials(
         self,
@@ -996,10 +989,22 @@ class EventService:
         working_dir = Path(workspace.working_dir)
         working_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_workspace_is_git_repo(working_dir)
-        agent_cls = type(self.stored.agent)
-        agent = agent_cls.model_validate(
-            self.stored.agent.model_dump(context={"expose_secrets": True}),
+        base_state_exists = await asyncio.to_thread(
+            (self.conversation_dir / BASE_STATE).exists
         )
+        if base_state_exists:
+            agent: AgentBase | None = None
+        else:
+            launch_agent = self.agent or self.stored.agent
+            if launch_agent is None:
+                raise ValueError(
+                    "Cannot start a new conversation without an agent: no "
+                    "base_state.json to resume and no agent was provided."
+                )
+            agent_cls = type(launch_agent)
+            agent = agent_cls.model_validate(
+                launch_agent.model_dump(context={"expose_secrets": True}),
+            )
 
         # Create LocalConversation with plugins and hook_config.
         # Plugins are loaded lazily on first run()/send_message() call.
@@ -1014,13 +1019,13 @@ class EventService:
         # Only wire token streaming for agents that can actually emit token
         # callbacks. SDK LLM agents need stream=True, while ACP agents emit
         # AgentMessageChunk text through their bridge without exposing an LLM.
-        streaming_enabled = isinstance(agent, ACPAgent) or any(
-            llm.stream for llm in agent.get_all_llms()
-        )
-        logger.debug(
-            "Token streaming: %s",
-            "enabled" if streaming_enabled else "disabled (no LLM has stream=True)",
-        )
+        def agent_can_stream(value: AgentBase) -> bool:
+            return isinstance(value, ACPAgent) or any(
+                llm.stream for llm in value.get_all_llms()
+            )
+
+        streaming_enabled = agent_can_stream(agent) if agent is not None else True
+        streaming_decided = agent is not None
 
         def _publish_stream_delta(
             content: str | None = None,
@@ -1083,6 +1088,8 @@ class EventService:
 
         conversation.set_confirmation_policy(self.stored.confirmation_policy)
         conversation.set_security_analyzer(self.stored.security_analyzer)
+        if not streaming_decided and not agent_can_stream(conversation.agent):
+            conversation.set_token_callbacks(None)
         self._conversation = conversation
         if isinstance(conversation.agent, ACPAgent):
             for secret_name, binding in self.credential_bindings.items():
@@ -1659,13 +1666,8 @@ class EventService:
 
         For a conversation that has already started, runs the (blocking)
         protocol-level ``session/set_model`` round-trip in a worker thread; for
-        one not yet run, the SDK defers the switch (persist-only). Either way it
-        mirrors the new model into ``meta.json`` so the switch survives an
-        agent-server restart: ``start()`` rebuilds the agent from
-        ``self.stored.agent`` and ``ConversationState.create()`` copies that over
-        the persisted base_state.json on resume. Only ``acp_model`` needs
-        updating — ``model_post_init`` re-derives the sentinel ``llm.model`` on
-        reload.
+        one not yet run, the SDK defers the switch. The SDK conversation updates
+        its state Agent, whose autosave persists the model in ``base_state.json``.
         """
         if self._conversation is None:
             # Match the inactive-service convention of the other event-service
@@ -1675,10 +1677,6 @@ class EventService:
             raise ValueError("inactive_service")
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._conversation.switch_acp_model, model)
-        self.stored = self.stored.model_copy(
-            update={"agent": self.stored.agent.model_copy(update={"acp_model": model})}
-        )
-        await self.save_meta()
 
     async def close(self):
         self._closing = True

@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC
 from datetime import datetime
 from enum import Enum, StrEnum
-from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, TypeAlias, cast
 from uuid import UUID, uuid4
 
 from pydantic import (
@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     SecretStr,
     field_validator,
+    model_validator,
 )
 
 from openhands.sdk.agent.acp_models import ACPModelInfo
@@ -83,11 +84,13 @@ class EventSortOrder(StrEnum):
 class StoredConversation(StartConversationRequest):
     """Stored details about a conversation.
 
-    Extends StartConversationRequest with server-assigned fields.
+    Agent state is excluded because ``base_state.json`` is its sole durable source.
     """
 
-    # agent_profile_id is resolved into launched_agent_profile at creation; exclude from
-    # the persistence payload so it does not re-appear in meta.json.
+    # Launch-only compatibility for direct EventService/StoredConversation
+    # embedders. Exclusion is load-bearing: meta.json must never regain a second
+    # durable Agent copy, and resume ignores this field in favor of base_state.
+    agent: AgentBase = Field(default=cast(AgentBase, None), exclude=True)
     agent_profile_id: UUID | None = Field(default=None, exclude=True)
     required_runtime_credential_bindings: set[str] = Field(default_factory=set)
 
@@ -122,6 +125,11 @@ class StoredConversation(StartConversationRequest):
             "`agent_settings`."
         ),
     )
+
+    @model_validator(mode="after")
+    def _require_agent(self) -> StoredConversation:
+        """Allow persisted metadata to omit launch-only agent fields."""
+        return self
 
 
 class _ConversationInfoBase(BaseModel):

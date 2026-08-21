@@ -446,7 +446,7 @@ class ConversationState(OpenHandsModel):
     def create(
         cls: type["ConversationState"],
         id: ConversationID,
-        agent: AgentBase,
+        agent: AgentBase | None,
         workspace: BaseWorkspace,
         persistence_dir: str | None = None,
         max_iterations: int = 500,
@@ -537,12 +537,11 @@ class ConversationState(OpenHandsModel):
             # version or be corrupted.
             state.rebuild_view()
 
-            # Verify compatibility (agent class + tools)
-            agent.verify(state.agent, events=state._events)
-
             # Commit runtime-provided values (may autosave)
             state._autosave_enabled = True
-            state.agent = agent
+            if agent is not None:
+                agent.verify(state.agent, events=state._events)
+                state.agent = agent
             state.workspace = workspace
             state.max_iterations = max_iterations
 

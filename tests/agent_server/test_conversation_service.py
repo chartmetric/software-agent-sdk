@@ -6,6 +6,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
@@ -34,7 +35,7 @@ from openhands.agent_server.models import (
     UpdateConversationRequest,
 )
 from openhands.agent_server.utils import safe_rmtree as _safe_rmtree
-from openhands.sdk import LLM, Agent, Message
+from openhands.sdk import LLM, Agent, AgentBase, Message
 from openhands.sdk.agent.acp_agent import ACPAgent
 from openhands.sdk.conversation.request import SendMessageRequest
 from openhands.sdk.conversation.state import (
@@ -62,6 +63,10 @@ def mock_event_service():
     """Create a mock EventService with stored conversation data."""
     service = AsyncMock(spec=EventService)
     return service
+
+
+def _sample_agent() -> Agent:
+    return Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[])
 
 
 @pytest.fixture
@@ -187,15 +192,17 @@ async def test_start_conversation_registers_and_injects_client_tools(
         ],
     )
 
-    captured: dict[str, StoredConversation] = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_start_event_service(stored: StoredConversation, **_kwargs):
+    async def fake_start_event_service(stored: StoredConversation, **kwargs):
+        agent = cast(AgentBase, kwargs["agent"])
         captured["stored"] = stored
+        captured["agent"] = agent
         service = AsyncMock(spec=EventService)
         service.stored = stored
         service.get_state.return_value = ConversationState(
             id=stored.id,
-            agent=stored.agent,
+            agent=agent,
             workspace=stored.workspace,
             execution_status=ConversationExecutionStatus.IDLE,
             confirmation_policy=stored.confirmation_policy,
@@ -210,8 +217,9 @@ async def test_start_conversation_registers_and_injects_client_tools(
         await conversation_service.start_conversation(request)
 
     stored = captured["stored"]
+    agent = captured["agent"]
     # Injected into the agent's tool specs so _initialize() can resolve it
-    assert "srv_show_dialog" in {t.name for t in stored.agent.tools}
+    assert "srv_show_dialog" in {t.name for t in agent.tools}
     # Persisted so forks / restarts can re-register the dynamic action type
     assert [s.name for s in stored.client_tools] == ["srv_show_dialog"]
     # The class is registered in the global tool registry
@@ -263,15 +271,17 @@ async def test_start_conversation_decrypts_encrypted_agent_settings_mcp_env(
         == encrypted_mcp_token
     )
 
-    captured: dict[str, StoredConversation] = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_start_event_service(stored: StoredConversation, **_kwargs):
+    async def fake_start_event_service(stored: StoredConversation, **kwargs):
+        agent = cast(AgentBase, kwargs["agent"])
         captured["stored"] = stored
+        captured["agent"] = agent
         service = AsyncMock(spec=EventService)
         service.stored = stored
         service.get_state.return_value = ConversationState(
             id=stored.id,
-            agent=stored.agent,
+            agent=agent,
             workspace=stored.workspace,
             execution_status=ConversationExecutionStatus.IDLE,
             confirmation_policy=stored.confirmation_policy,
@@ -285,11 +295,11 @@ async def test_start_conversation_decrypts_encrypted_agent_settings_mcp_env(
     ):
         await conversation_service.start_conversation(request)
 
-    stored = captured["stored"]
-    assert isinstance(stored.agent.llm.api_key, SecretStr)
-    assert stored.agent.llm.api_key.get_secret_value() == "sk-plaintext"
+    agent = captured["agent"]
+    assert isinstance(agent.llm.api_key, SecretStr)
+    assert agent.llm.api_key.get_secret_value() == "sk-plaintext"
     assert (
-        dump_mcp_config(stored.agent.mcp_config)["github"]["env"][
+        dump_mcp_config(agent.mcp_config)["github"]["env"][
             "GITHUB_PERSONAL_ACCESS_TOKEN"
         ]
         == "ghp-plaintext"
@@ -783,7 +793,7 @@ async def test_waiting_hydration_cannot_restore_deleted_conversation(
         record = service._conversation_records[conversation_id]
         state = ConversationState(
             id=conversation_id,
-            agent=record.stored.agent,
+            agent=_sample_agent(),
             workspace=record.stored.workspace,
             execution_status=ConversationExecutionStatus.IDLE,
             confirmation_policy=record.stored.confirmation_policy,
@@ -846,7 +856,7 @@ async def test_shutdown_closes_runtime_from_in_flight_hydration(
     record = service._conversation_records[conversation_id]
     state = ConversationState(
         id=conversation_id,
-        agent=record.stored.agent,
+        agent=_sample_agent(),
         workspace=record.stored.workspace,
         execution_status=ConversationExecutionStatus.IDLE,
         confirmation_policy=record.stored.confirmation_policy,
@@ -994,7 +1004,7 @@ class TestConversationServiceSearchConversations:
         mock_service.stored = stored_conv
         mock_service.get_state.return_value = ConversationState(
             id=stored_conv.id,
-            agent=stored_conv.agent,
+            agent=agent,
             workspace=stored_conv.workspace,
             execution_status=ConversationExecutionStatus.IDLE,
             confirmation_policy=stored_conv.confirmation_policy,
@@ -1041,7 +1051,7 @@ class TestConversationServiceSearchConversations:
             mock_service.stored = stored_conv
             mock_state = ConversationState(
                 id=stored_conv.id,
-                agent=stored_conv.agent,
+                agent=_sample_agent(),
                 workspace=stored_conv.workspace,
                 execution_status=status,
                 confirmation_policy=stored_conv.confirmation_policy,
@@ -1095,7 +1105,7 @@ class TestConversationServiceSearchConversations:
             mock_service.stored = stored_conv
             mock_state = ConversationState(
                 id=stored_conv.id,
-                agent=stored_conv.agent,
+                agent=_sample_agent(),
                 workspace=stored_conv.workspace,
                 execution_status=ConversationExecutionStatus.IDLE,
                 confirmation_policy=stored_conv.confirmation_policy,
@@ -1170,7 +1180,7 @@ class TestConversationServiceSearchConversations:
             mock_service.stored = stored_conv
             mock_state = ConversationState(
                 id=stored_conv.id,
-                agent=stored_conv.agent,
+                agent=_sample_agent(),
                 workspace=stored_conv.workspace,
                 execution_status=ConversationExecutionStatus.IDLE,
                 confirmation_policy=stored_conv.confirmation_policy,
@@ -1240,7 +1250,7 @@ class TestConversationServiceSearchConversations:
             mock_service.stored = stored_conv
             mock_state = ConversationState(
                 id=stored_conv.id,
-                agent=stored_conv.agent,
+                agent=_sample_agent(),
                 workspace=stored_conv.workspace,
                 execution_status=status,
                 confirmation_policy=stored_conv.confirmation_policy,
@@ -1357,7 +1367,7 @@ class TestConversationServiceCountConversations:
             mock_service.stored = stored_conv
             mock_state = ConversationState(
                 id=stored_conv.id,
-                agent=stored_conv.agent,
+                agent=_sample_agent(),
                 workspace=stored_conv.workspace,
                 execution_status=status,
                 confirmation_policy=stored_conv.confirmation_policy,
@@ -1413,12 +1423,15 @@ class TestConversationServiceCountConversations:
             updated_at=datetime(2025, 1, 1, 13, 30, 0, tzinfo=UTC),
         )
 
-        for stored_conv in (legacy_conversation, acp_conversation):
+        agents = (_sample_agent(), ACPAgent(acp_command=["echo", "test"]))
+        for stored_conv, agent in zip(
+            (legacy_conversation, acp_conversation), agents, strict=True
+        ):
             mock_service = AsyncMock(spec=EventService)
             mock_service.stored = stored_conv
             mock_service.get_state.return_value = ConversationState(
                 id=stored_conv.id,
-                agent=stored_conv.agent,
+                agent=agent,
                 workspace=stored_conv.workspace,
                 execution_status=ConversationExecutionStatus.IDLE,
                 confirmation_policy=stored_conv.confirmation_policy,
@@ -1621,16 +1634,18 @@ class TestConversationServiceStartConversation:
             worktree=True,
         )
 
-        captured: dict[str, StoredConversation] = {}
+        captured: dict[str, Any] = {}
 
         def _event_service_factory(**kwargs):
             stored = kwargs["stored"]
+            agent = cast(AgentBase, kwargs["agent"])
             captured["stored"] = stored
+            captured["agent"] = agent
             mock_event_service = AsyncMock(spec=EventService)
             mock_event_service.stored = stored
             mock_event_service.get_state.return_value = ConversationState(
                 id=stored.id,
-                agent=stored.agent,
+                agent=agent,
                 workspace=stored.workspace,
                 execution_status=ConversationExecutionStatus.IDLE,
                 confirmation_policy=stored.confirmation_policy,
@@ -1650,6 +1665,7 @@ class TestConversationServiceStartConversation:
             result, _ = await conversation_service.start_conversation(request)
 
         stored = captured["stored"]
+        agent = captured["agent"]
         expected_worktree = worktree_root / str(conversation_id) / repo_dir.name
         expected_branch = f"openhands/{conversation_id}"
 
@@ -1664,8 +1680,8 @@ class TestConversationServiceStartConversation:
             )
             == expected_branch
         )
-        assert stored.agent.agent_context is not None
-        suffix = stored.agent.agent_context.system_message_suffix
+        assert agent.agent_context is not None
+        suffix = agent.agent_context.system_message_suffix
         assert suffix is not None
         assert str(repo_dir.resolve()) in suffix
         assert str(expected_worktree) in suffix
@@ -1691,16 +1707,18 @@ class TestConversationServiceStartConversation:
             worktree=True,
         )
 
-        captured: dict[str, StoredConversation] = {}
+        captured: dict[str, Any] = {}
 
         def _event_service_factory(**kwargs):
             stored = kwargs["stored"]
+            agent = cast(AgentBase, kwargs["agent"])
             captured["stored"] = stored
+            captured["agent"] = agent
             mock_event_service = AsyncMock(spec=EventService)
             mock_event_service.stored = stored
             mock_event_service.get_state.return_value = ConversationState(
                 id=stored.id,
-                agent=stored.agent,
+                agent=agent,
                 workspace=stored.workspace,
                 execution_status=ConversationExecutionStatus.IDLE,
                 confirmation_policy=stored.confirmation_policy,
@@ -1745,16 +1763,18 @@ class TestConversationServiceStartConversation:
             worktree=True,
         )
 
-        captured: dict[str, StoredConversation] = {}
+        captured: dict[str, Any] = {}
 
         def _event_service_factory(**kwargs):
             stored = kwargs["stored"]
+            agent = cast(AgentBase, kwargs["agent"])
             captured["stored"] = stored
+            captured["agent"] = agent
             mock_event_service = AsyncMock(spec=EventService)
             mock_event_service.stored = stored
             mock_event_service.get_state.return_value = ConversationState(
                 id=stored.id,
-                agent=stored.agent,
+                agent=agent,
                 workspace=stored.workspace,
                 execution_status=ConversationExecutionStatus.IDLE,
                 confirmation_policy=stored.confirmation_policy,
@@ -1774,11 +1794,12 @@ class TestConversationServiceStartConversation:
             result, _ = await conversation_service.start_conversation(request)
 
         stored = captured["stored"]
+        agent = captured["agent"]
 
         assert stored.worktree is True
         assert stored.workspace.working_dir == str(workspace_dir)
         assert result.workspace.working_dir == str(workspace_dir)
-        assert stored.agent.agent_context is None
+        assert agent.agent_context is None
         assert not (worktree_root / str(conversation_id)).exists()
 
     def test_get_worktree_start_point_prefers_origin_default_branch(self, tmp_path):
@@ -2052,9 +2073,10 @@ class TestConversationServiceStartConversation:
         self, conversation_service
     ):
         custom_id = uuid4()
+        acp_agent = ACPAgent(acp_command=["echo", "test"])
         stored = StoredConversation(
             id=custom_id,
-            agent=ACPAgent(acp_command=["echo", "test"]),
+            agent=acp_agent,
             workspace=LocalWorkspace(working_dir="workspace/project"),
             confirmation_policy=NeverConfirm(),
             initial_message=None,
@@ -2067,7 +2089,7 @@ class TestConversationServiceStartConversation:
         mock_event_service.stored = stored
         mock_event_service.get_state.return_value = ConversationState(
             id=stored.id,
-            agent=stored.agent,
+            agent=acp_agent,
             workspace=stored.workspace,
             execution_status=ConversationExecutionStatus.IDLE,
             confirmation_policy=stored.confirmation_policy,
@@ -2404,9 +2426,10 @@ class TestConversationServiceUpdateConversation:
     async def test_update_acp_conversation_notifies_webhooks_with_acp_shape(
         self, conversation_service
     ):
+        acp_agent = ACPAgent(acp_command=["echo", "test"])
         stored_conversation = StoredConversation(
             id=uuid4(),
-            agent=ACPAgent(acp_command=["echo", "test"]),
+            agent=acp_agent,
             workspace=LocalWorkspace(working_dir="workspace/project"),
             confirmation_policy=NeverConfirm(),
             initial_message=None,
@@ -2418,7 +2441,7 @@ class TestConversationServiceUpdateConversation:
         mock_service.stored = stored_conversation
         mock_state = ConversationState(
             id=stored_conversation.id,
-            agent=stored_conversation.agent,
+            agent=acp_agent,
             workspace=stored_conversation.workspace,
             execution_status=ConversationExecutionStatus.IDLE,
             confirmation_policy=stored_conversation.confirmation_policy,
@@ -2953,9 +2976,10 @@ class TestAutoTitle:
         llm_model: str = "gpt-4o",
         llm_usage_id: str = "test-llm",
     ) -> AsyncMock:
+        agent = Agent(llm=LLM(model=llm_model, usage_id=llm_usage_id), tools=[])
         stored = StoredConversation(
             id=uuid4(),
-            agent=Agent(llm=LLM(model=llm_model, usage_id=llm_usage_id), tools=[]),
+            agent=agent,
             workspace=LocalWorkspace(working_dir="workspace/project"),
             confirmation_policy=NeverConfirm(),
             initial_message=None,
@@ -2967,7 +2991,7 @@ class TestAutoTitle:
         service.stored = stored
 
         mock_conversation = MagicMock()
-        mock_conversation.agent.llm = stored.agent.llm
+        mock_conversation.agent.llm = agent.llm
         service._conversation = mock_conversation
         return service
 
@@ -3632,9 +3656,10 @@ class TestConversationSearchScaling:
             conversation_id = uuid4()
             target = conversations_dir / conversation_id.hex
             target.mkdir()
+            agent = Agent(llm=LLM(model="gpt-4o", usage_id=f"llm-{i}"), tools=[])
             stored = StoredConversation(
                 id=conversation_id,
-                agent=Agent(llm=LLM(model="gpt-4o", usage_id=f"llm-{i}"), tools=[]),
+                agent=agent,
                 workspace=LocalWorkspace(working_dir=str(workspace_dir)),
                 confirmation_policy=NeverConfirm(),
             )
@@ -3643,7 +3668,7 @@ class TestConversationSearchScaling:
             (target / "meta.json").write_text(stored.model_dump_json())
             state = ConversationState(
                 id=conversation_id,
-                agent=stored.agent,
+                agent=agent,
                 workspace=stored.workspace,
                 persistence_dir=str(target),
             )
