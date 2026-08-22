@@ -57,45 +57,6 @@ MAX_CONSECUTIVE_PROBE_MISSES = 3
 RESERVED_PORTS = frozenset({22, 8000, 8001, 8002, 60000, 60001, 60002})
 PROC_NET_PATHS = (Path("/proc/net/tcp"), Path("/proc/net/tcp6"))
 PROC_DIR = Path("/proc")
-LAUNCHER_RELAY_MARKER_PREFIX = "oh-runtime-port-proxy-"
-
-
-def _launcher_relay_targets() -> dict[int, int]:
-    """Worker ports held by the repository launcher's own relay, mapped to the
-    upstream port each relay forwards to.
-
-    The launcher parks a disposable TCP relay on the public worker port it
-    serves so a later launch can clear the port without a pid file; its argv
-    ends with ``<public_port> <upstream_port> oh-runtime-port-proxy-<public_port>``
-    precisely so it can be identified in the process table. Discovery used to
-    count that relay as one app bound directly on its worker port and the
-    upstream dev server as a second one, hand the upstream another worker, and
-    the panel offered the same application twice. Read the mapping from the
-    marker and treat the pair as a single app instead.
-    """
-    relays: dict[int, int] = {}
-    if not PROC_DIR.exists():
-        return relays
-    for entry in PROC_DIR.iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            argv = [arg for arg in (entry / "cmdline").read_bytes().split(b"\0") if arg]
-        except OSError:
-            continue
-        if len(argv) < 3:
-            continue
-        try:
-            marker = argv[-1].decode()
-            public = int(argv[-3])
-            upstream = int(argv[-2])
-        except (UnicodeDecodeError, ValueError):
-            continue
-        if marker != f"{LAUNCHER_RELAY_MARKER_PREFIX}{public}":
-            continue
-        if public != upstream and 0 < public < 65536 and 0 < upstream < 65536:
-            relays[public] = upstream
-    return relays
 
 
 class ServedApp(BaseModel):
@@ -265,12 +226,7 @@ class ServedAppService:
                 logger.warning("Failed to discover served apps", exc_info=True)
 
     async def _reconcile(self) -> None:
-        launcher_relays = {
-            public: upstream
-            for public, upstream in _launcher_relay_targets().items()
-            if public in WORKER_PORTS
-        }
-        listening_ports = _listening_ports() - set(self._servers) - set(launcher_relays)
+        listening_ports = _listening_ports() - set(self._servers)
         ordered_ports = sorted(listening_ports)
         probes = await asyncio.gather(*(_probe_http(port) for port in ordered_ports))
 
@@ -320,12 +276,6 @@ class ServedAppService:
         targets: dict[int, int] = {
             app.port: app.port for app in discovered if app.port in WORKER_PORTS
         }
-        # The launcher's relay already serves its upstream app on this worker
-        # port, so record the mapping up front: the upstream must not be
-        # handed a second worker of its own.
-        for public, upstream in launcher_relays.items():
-            if upstream in apps and public not in targets:
-                targets[public] = upstream
         # An app keeps the worker it already holds. Rebuilding the mapping from
         # scratch every cycle let an appearing or vanishing listener shuffle
         # every assignment, so the same application moved between public worker
@@ -359,11 +309,6 @@ class ServedAppService:
         self._apps, self._targets = apps, targets
         for worker_port, target_port in targets.items():
             if worker_port in self._servers or worker_port == target_port:
-                continue
-            # The launcher's relay owns this socket while it lives; binding
-            # here would fail every cycle. Once that relay exits, the mapping
-            # survives and this loop takes the port over seamlessly.
-            if worker_port in launcher_relays:
                 continue
             try:
                 self._servers[worker_port] = await asyncio.start_server(
