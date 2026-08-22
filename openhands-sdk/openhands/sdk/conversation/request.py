@@ -310,6 +310,20 @@ class StartConversationRequest(ConversationConfig):
         ),
     )
     agent: AgentBase = Field(default=cast(AgentBase, None))
+    llm_fallback_profiles: list[str] = Field(
+        default_factory=list,
+        description=(
+            "LLM profile names the agent's LLM should fall back to when a call "
+            "fails with a transient error after retries. Carried as names "
+            "rather than as a built strategy because ``LLM.fallback_strategy`` "
+            "is excluded from serialization by design -- it holds live objects "
+            "and a profile-store path that only mean something in the process "
+            "that will make the call. So a client cannot hand one over; it can "
+            "only say which profiles to rebuild from, and this server resolves "
+            "them against its own profile store. Ignored when the agent's LLM "
+            "already carries a strategy."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

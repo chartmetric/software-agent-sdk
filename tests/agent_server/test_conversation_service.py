@@ -21,6 +21,7 @@ from openhands.agent_server.conversation_lease import (
 from openhands.agent_server.conversation_service import (
     AutoTitleSubscriber,
     ConversationService,
+    _attach_llm_fallback,
     _ConversationRecord,
     _get_worktree_start_point,
 )
@@ -49,6 +50,7 @@ from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
 from openhands.sdk.event.llm_convertible import MessageEvent
 from openhands.sdk.git.utils import run_git_command
 from openhands.sdk.llm import MessageToolCall, TextContent
+from openhands.sdk.llm.fallback_strategy import FallbackStrategy
 from openhands.sdk.mcp.config import dump_mcp_config
 from openhands.sdk.secret import SecretSource, StaticSecret
 from openhands.sdk.security.confirmation_policy import NeverConfirm
@@ -3846,3 +3848,52 @@ class TestConversationSearchScaling:
                 )
 
             assert [item.id for item in page.items] == [target]
+
+
+class TestLlmFallbackReattachment:
+    """``LLM.fallback_strategy`` cannot cross a launch request; it is rebuilt here."""
+
+    @staticmethod
+    def _agent() -> Agent:
+        return Agent(llm=LLM(model="gpt-5.6", api_key=SecretStr("k"), usage_id="agent"))
+
+    def test_a_strategy_does_not_survive_serialization(self) -> None:
+        """The reason the reattachment has to exist at all."""
+        agent = self._agent()
+        agent.llm.fallback_strategy = FallbackStrategy(fallback_llms=["twin"])
+
+        restored = Agent.model_validate(agent.model_dump())
+
+        assert restored.llm.fallback_strategy is None
+
+    def test_named_profiles_are_rebuilt_onto_the_agent_llm(self) -> None:
+        rebuilt = _attach_llm_fallback(self._agent(), ["twin"])
+
+        assert rebuilt.llm.fallback_strategy is not None
+        assert rebuilt.llm.fallback_strategy.fallback_llms == ["twin"]
+
+    def test_an_existing_strategy_is_left_alone(self) -> None:
+        agent = self._agent()
+        agent.llm.fallback_strategy = FallbackStrategy(fallback_llms=["chosen"])
+
+        rebuilt = _attach_llm_fallback(agent, ["ignored"])
+
+        strategy = rebuilt.llm.fallback_strategy
+        assert strategy is not None
+        assert strategy.fallback_llms == ["chosen"]
+
+    def test_an_agent_without_an_llm_is_returned_untouched(self) -> None:
+        acp = object()
+
+        assert _attach_llm_fallback(cast(Any, acp), ["twin"]) is acp
+
+    def test_the_request_carries_the_names(self) -> None:
+        request = StartConversationRequest(
+            agent=self._agent(),
+            workspace=LocalWorkspace(working_dir="/tmp"),
+            llm_fallback_profiles=["twin"],
+        )
+
+        assert StartConversationRequest.model_validate(
+            json.loads(request.model_dump_json())
+        ).llm_fallback_profiles == ["twin"]

@@ -65,6 +65,7 @@ from openhands.sdk.event import MessageEvent
 from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
 from openhands.sdk.git.exceptions import GitCommandError, GitRepositoryError
 from openhands.sdk.git.utils import run_git_command, validate_git_repository
+from openhands.sdk.llm.fallback_strategy import FallbackStrategy
 from openhands.sdk.mcp.utils import MCPToolProvider
 from openhands.sdk.observability import OPERATION_METADATA_KEY, observe
 from openhands.sdk.tool import BROWSER_TOOL_NAME, Tool, is_tool_usable
@@ -246,6 +247,31 @@ def _create_conversation_worktree(
         source_workspace,
         worktree_root,
         branch,
+    )
+
+
+def _attach_llm_fallback(agent: AgentBase, profiles: list[str]) -> AgentBase:
+    """Rebuild the agent LLM's fallback strategy from profile names.
+
+    ``LLM.fallback_strategy`` is ``exclude=True`` -- its own field description
+    says it "must be reconfigured after load" -- so a strategy set by whoever
+    built the agent does not survive being serialized into a launch request.
+    Nothing used to reconfigure it, which made the field unreachable for any
+    client that does not construct its LLM in this process: the strategy was
+    silently dropped and the first transient failure ended the run instead of
+    continuing on the named profile.
+
+    Resolution happens here, against this server's own profile store, because
+    that is the store the fallback will actually be loaded from. An LLM that
+    already carries a strategy keeps it, and an agent with no LLM (ACP) is
+    returned untouched.
+    """
+    llm = getattr(agent, "llm", None)
+    if llm is None or llm.fallback_strategy is not None:
+        return agent
+    strategy = FallbackStrategy(fallback_llms=list(profiles))
+    return agent.model_copy(
+        update={"llm": llm.model_copy(update={"fallback_strategy": strategy})}
     )
 
 
@@ -1369,6 +1395,15 @@ class ConversationService:
             )
 
         request = _prepare_request_workspace(request, conversation_id)
+
+        if request.llm_fallback_profiles and request.agent is not None:
+            request = request.model_copy(
+                update={
+                    "agent": _attach_llm_fallback(
+                        request.agent, request.llm_fallback_profiles
+                    )
+                }
+            )
 
         managed_codex_credential = self._is_codex_agent(request.agent) and (
             CODEX_AUTH_SECRET_NAME in self._credential_bindings.get(conversation_id, {})
