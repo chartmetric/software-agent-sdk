@@ -3882,10 +3882,11 @@ class TestLlmFallbackReattachment:
         assert strategy is not None
         assert strategy.fallback_llms == ["chosen"]
 
-    def test_an_agent_without_an_llm_is_returned_untouched(self) -> None:
-        acp = object()
+    def test_an_acp_agent_is_returned_untouched(self) -> None:
+        """An ACP subprocess owns its own model; there is no LLM to give one."""
+        acp = ACPAgent(acp_command=["echo", "test"])
 
-        assert _attach_llm_fallback(cast(Any, acp), ["twin"]) is acp
+        assert _attach_llm_fallback(acp, ["twin"]) is acp
 
     def test_the_request_carries_the_names(self) -> None:
         request = StartConversationRequest(

@@ -263,9 +263,15 @@ def _attach_llm_fallback(agent: AgentBase, profiles: list[str]) -> AgentBase:
 
     Resolution happens here, against this server's own profile store, because
     that is the store the fallback will actually be loaded from. An LLM that
-    already carries a strategy keeps it, and an agent with no LLM (ACP) is
-    returned untouched.
+    already carries a strategy keeps it.
+
+    An ACP agent is skipped by type rather than by "has no LLM": it has one,
+    a placeholder ``model="acp-managed"`` standing in for a model the
+    subprocess owns and this server never calls. Attaching a fallback to that
+    placeholder would describe a call that cannot happen.
     """
+    if isinstance(agent, ACPAgent):
+        return agent
     llm = getattr(agent, "llm", None)
     if llm is None or llm.fallback_strategy is not None:
         return agent
