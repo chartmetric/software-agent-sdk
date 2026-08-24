@@ -42,6 +42,46 @@ async def test_reconcile_prioritizes_web_apps_and_assigns_worker_ports(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_a_worker_port_the_launcher_gave_a_service_is_left_alone(monkeypatch):
+    """A repository service owns its worker port while it is restarting.
+
+    Measured in production across four runs of one prompt: the launcher gave the
+    web app 12000, a restart left the port free for one discovery cycle, this
+    loop relayed a different listener onto it, and the app then died on
+    `EADDRINUSE 0.0.0.0:12000` every time it came back. The loop survives losing
+    that race and the application does not, so it only ever resolved one way.
+
+    Sockets cannot answer this: "down for a restart" and "never existed" look
+    identical. The launcher's own `.port` record can, so read that.
+    """
+    monkeypatch.setattr(served_app_service, "WORKER_PORTS", (12000, 12001))
+    # The web app is mid-restart: nothing is listening on 12000, and another
+    # service is up on a port of its own.
+    monkeypatch.setattr(served_app_service, "_listening_ports", lambda: {4000})
+    monkeypatch.setattr(
+        served_app_service, "_repository_service_ports", lambda: {12000}
+    )
+
+    async def probe(port: int):
+        return _DiscoveredApp(port=port, kind="api")
+
+    bound: list[int] = []
+
+    async def start_server(handler, host, port):
+        bound.append(port)
+        return _FakeServer()
+
+    monkeypatch.setattr(served_app_service, "_probe_http", probe)
+    monkeypatch.setattr(asyncio, "start_server", start_server)
+    service = ServedAppService()
+
+    await service._reconcile()
+
+    assert 12000 not in bound, "took the port the web app is coming back to"
+    assert [app.worker_port for app in service.list_apps()] == [12001]
+
+
+@pytest.mark.asyncio
 async def test_reconcile_retries_worker_bridge_after_bind_failure(monkeypatch):
     monkeypatch.setattr(served_app_service, "_listening_ports", lambda: {3001})
 

@@ -57,6 +57,42 @@ MAX_CONSECUTIVE_PROBE_MISSES = 3
 RESERVED_PORTS = frozenset({22, 8000, 8001, 8002, 60000, 60001, 60002})
 PROC_NET_PATHS = (Path("/proc/net/tcp"), Path("/proc/net/tcp6"))
 PROC_DIR = Path("/proc")
+# Where the repository launcher records the port it gave each service it starts.
+# One file per service, holding the port and nothing else.
+RUNTIME_SERVICE_STATE_DIR = Path("/tmp/openhands-runtime-services")
+
+
+def _repository_service_ports() -> set[int]:
+    """Ports the repository launcher has handed to a service it manages.
+
+    A service handed a worker port as its `PORT` owns that port whether or not
+    it happens to be listening right now. Discovery cannot tell "down for a
+    restart" from "never existed" by looking at sockets, and the difference
+    decides whether this loop may put another app there.
+
+    Measured in production across four runs of one prompt: the web app was given
+    12000, a restart left the port free for a moment, this loop bound it to
+    relay a different listener, and the app then died on
+    `EADDRINUSE 0.0.0.0:12000` every time it came back. The loop tolerates
+    losing that race -- its own bind is wrapped in `except OSError` -- and the
+    application does not, so the race only ever resolves one way. Reading the
+    launcher's own record removes the race instead of narrowing it.
+    """
+    ports: set[int] = set()
+    try:
+        entries = list(RUNTIME_SERVICE_STATE_DIR.iterdir())
+    except OSError:
+        return ports
+    for entry in entries:
+        if entry.suffix != ".port":
+            continue
+        try:
+            port = int(entry.read_text().strip())
+        except (OSError, ValueError):
+            continue
+        if 0 < port < 65536:
+            ports.add(port)
+    return ports
 
 
 class ServedApp(BaseModel):
@@ -281,14 +317,26 @@ class ServedAppService:
         # every assignment, so the same application moved between public worker
         # URLs from one discovery pass to the next and the App panel reloaded.
         assigned = set(targets.values())
+        # A worker port the launcher has given to a repository service is that
+        # service's, down or not. Excluded here as well as below so a mapping
+        # made before the launcher recorded the port is dropped on the next
+        # cycle -- and the cleanup below then closes the socket, which is what
+        # lets the service bind when it comes back.
+        service_ports = _repository_service_ports()
         for worker_port, target_port in self._targets.items():
             if worker_port in targets or target_port in assigned:
+                continue
+            if worker_port in service_ports:
                 continue
             if target_port not in apps or target_port in WORKER_PORTS:
                 continue
             targets[worker_port] = target_port
             assigned.add(target_port)
-        available_workers = [port for port in WORKER_PORTS if port not in targets]
+        available_workers = [
+            port
+            for port in WORKER_PORTS
+            if port not in targets and port not in service_ports
+        ]
         unassigned_apps = [
             app
             for app in discovered
