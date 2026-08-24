@@ -3898,3 +3898,43 @@ class TestLlmFallbackReattachment:
         assert StartConversationRequest.model_validate(
             json.loads(request.model_dump_json())
         ).llm_fallback_profiles == ["twin"]
+
+
+@pytest.mark.asyncio
+async def test_webhook_failure_log_names_a_reason_that_stringifies_empty(caplog):
+    """A timeout must not be recorded as a blank reason.
+
+    httpx timeout exceptions stringify to '', so `failed: {e}` wrote nothing and a
+    sandbox that could not reach the control plane looked exactly like one the
+    control plane had refused. Production spent an hour in that state with four
+    conversations frozen and no line naming why.
+    """
+    import logging
+    from unittest.mock import patch
+    from uuid import uuid4
+
+    import httpx
+
+    from openhands.agent_server.config import WebhookSpec
+    from openhands.agent_server.conversation_service import WebhookSubscriber
+
+    subscriber = WebhookSubscriber(
+        conversation_id=uuid4(),
+        service=MagicMock(),
+        spec=WebhookSpec(base_url="https://example.invalid", num_retries=0),
+    )
+    subscriber._sleep = AsyncMock()
+
+    with patch("httpx.AsyncClient") as client:
+        client.return_value.__aenter__.return_value.request = AsyncMock(
+            side_effect=httpx.ReadTimeout("")
+        )
+        with caplog.at_level(logging.WARNING):
+            posted = await subscriber._post_batch([{"id": "e1"}])
+
+    assert posted is False
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    assert "ReadTimeout" in messages
+    # The final error is the line an operator reads; it has to carry the reason.
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors and "ReadTimeout" in errors[-1]

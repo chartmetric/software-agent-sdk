@@ -2461,13 +2461,20 @@ class WebhookSubscriber(Subscriber):
                     )
                     return True
             except Exception as e:
-                logger.warning(f"Webhook post attempt {attempt + 1} failed: {e}")
+                # A read timeout and a connect timeout both stringify to '', so
+                # `failed: {e}` recorded nothing at all and a sandbox that could
+                # not reach the control plane looked identical to one refused by
+                # it. The type is the only thing that names which happened, and
+                # the final error is the line an operator actually reads, so it
+                # has to carry the reason too.
+                detail = str(e) or type(e).__name__
+                logger.warning(f"Webhook post attempt {attempt + 1} failed: {detail}")
                 if attempt < self.spec.num_retries:
                     await self._sleep(self.spec.retry_delay)
                 else:
                     logger.error(
                         f"Failed to post events to webhook {events_url} "
-                        f"after {self.spec.num_retries + 1} attempts"
+                        f"after {self.spec.num_retries + 1} attempts: {detail}"
                     )
         return False
 
