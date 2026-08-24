@@ -7,7 +7,7 @@ import os
 import threading
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
+from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from rich.text import Text
@@ -1126,7 +1126,6 @@ def _sequence_step_actions() -> dict[str, type[BrowserAction]]:
         "navigate": BrowserNavigateAction,
         "click": BrowserClickAction,
         "type": BrowserTypeAction,
-        "fill_form": BrowserFillFormAction,
         "get_state": BrowserGetStateAction,
         "get_content": BrowserGetContentAction,
         "scroll": BrowserScrollAction,
@@ -1142,11 +1141,12 @@ class BrowserSequenceStep(BaseModel):
     action: str = Field(
         description=(
             "Which browser action to run. One of: "
-            "navigate, click, type, fill_form, get_state, get_content, "
-            "scroll, go_back, list_tabs, switch_tab."
+            "navigate, click, type, get_state, get_content, scroll, "
+            "go_back, list_tabs, switch_tab. Use browser_fill_form on its own: "
+            "its fields are objects, which a step's flat arguments cannot carry."
         )
     )
-    arguments: dict[str, Any] = Field(
+    arguments: dict[str, str | int | bool | None] = Field(
         default_factory=dict,
         description=(
             "Arguments for that action, exactly as the single-action tool of the "
@@ -1198,6 +1198,10 @@ class BrowserSequenceTool(
     ToolDefinition[BrowserSequenceAction, BrowserObservation],
 ):
     """Tool for running a batch of browser interactions in one call."""
+
+    # Browser tools do not consume arbitrary MCP metadata. Narrowing this
+    # inherited field keeps their public OpenAPI component strongly typed.
+    meta: dict[str, str] | None = None
 
     @classmethod
     def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
