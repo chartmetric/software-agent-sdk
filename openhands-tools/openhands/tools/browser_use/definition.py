@@ -15,6 +15,7 @@ from rich.text import Text
 from openhands.sdk.llm import ImageContent, TextContent
 from openhands.sdk.tool import (
     Action,
+    DeclaredResources,
     Observation,
     ToolAnnotations,
     ToolDefinition,
@@ -161,6 +162,33 @@ class BrowserAction(Action):
     pass
 
 
+# Every browser tool drives the same one browser, so they all lock this.
+#
+# Without it each tool fell back to the executor's per-tool mutex, keyed on the
+# tool's own name -- which serializes two `browser_get_state` calls and lets
+# `browser_navigate` run *concurrently* with `browser_get_state`, on one session.
+# The failure mode is a capture of the wrong page, and captures are what feed
+# published evidence. Measured over 7 days: 4 steps in 15,610 emitted two
+# different browser tools in one step -- rare, and not a risk worth carrying,
+# because a wrong screenshot does not announce itself.
+#
+# Declaring it is also what lets an execution agent raise
+# `tool_concurrency_limit` above 1 at all: the ceiling was held at 1 precisely
+# because this key did not exist.
+BROWSER_SESSION_RESOURCE = "browser:session"
+
+
+class _SharesOneBrowserSession:
+    """Mixin declaring that a tool drives the single shared browser session.
+
+    Mixed into every browser tool definition rather than set per tool, so a tool
+    added later cannot quietly opt out of the lock by forgetting to override.
+    """
+
+    def declared_resources(self, action: Action) -> DeclaredResources:  # noqa: ARG002
+        return DeclaredResources(keys=(BROWSER_SESSION_RESOURCE,), declared=True)
+
+
 # ============================================
 # `go_to_url`
 # ============================================
@@ -187,7 +215,10 @@ Examples:
 """  # noqa: E501
 
 
-class BrowserNavigateTool(ToolDefinition[BrowserNavigateAction, BrowserObservation]):
+class BrowserNavigateTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserNavigateAction, BrowserObservation],
+):
     """Tool for browser navigation."""
 
     @classmethod
@@ -237,7 +268,10 @@ Important: Only use indices that appear in your current browser_get_state output
 """  # noqa: E501
 
 
-class BrowserClickTool(ToolDefinition[BrowserClickAction, BrowserObservation]):
+class BrowserClickTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserClickAction, BrowserObservation],
+):
     """Tool for clicking browser elements."""
 
     @classmethod
@@ -305,7 +339,10 @@ Important: Only use indices that appear in your current browser_get_state output
 """  # noqa: E501
 
 
-class BrowserTypeTool(ToolDefinition[BrowserTypeAction, BrowserObservation]):
+class BrowserTypeTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserTypeAction, BrowserObservation],
+):
     """Tool for typing text into browser elements."""
 
     @classmethod
@@ -396,7 +433,10 @@ the credential fields are no longer visible.
 """
 
 
-class BrowserFillFormTool(ToolDefinition[BrowserFillFormAction, BrowserObservation]):
+class BrowserFillFormTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserFillFormAction, BrowserObservation],
+):
     """Tool for filling and optionally submitting one current-page form."""
 
     # Browser tools do not consume arbitrary MCP metadata. Narrowing this
@@ -447,7 +487,10 @@ Parameters:
 """
 
 
-class BrowserGetSecretTool(ToolDefinition[BrowserGetSecretAction, BrowserObservation]):
+class BrowserGetSecretTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserGetSecretAction, BrowserObservation],
+):
     """Tool for retrieving a registered secret at runtime."""
 
     # Browser tools do not consume arbitrary MCP metadata. Narrowing this
@@ -495,7 +538,10 @@ Parameters:
 """  # noqa: E501
 
 
-class BrowserGetStateTool(ToolDefinition[BrowserGetStateAction, BrowserObservation]):
+class BrowserGetStateTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserGetStateAction, BrowserObservation],
+):
     """Tool for getting browser state."""
 
     @classmethod
@@ -541,7 +587,8 @@ If the content was truncated and you need more information, use start_from_char 
 
 
 class BrowserGetContentTool(
-    ToolDefinition[BrowserGetContentAction, BrowserObservation]
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserGetContentAction, BrowserObservation],
 ):
     """Tool for getting page content in markdown."""
 
@@ -586,7 +633,10 @@ Parameters:
 """  # noqa: E501
 
 
-class BrowserScrollTool(ToolDefinition[BrowserScrollAction, BrowserObservation]):
+class BrowserScrollTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserScrollAction, BrowserObservation],
+):
     """Tool for scrolling the browser page."""
 
     @classmethod
@@ -624,7 +674,10 @@ browser's back button.
 """  # noqa: E501
 
 
-class BrowserGoBackTool(ToolDefinition[BrowserGoBackAction, BrowserObservation]):
+class BrowserGoBackTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserGoBackAction, BrowserObservation],
+):
     """Tool for going back in browser history."""
 
     @classmethod
@@ -662,7 +715,10 @@ with browser_switch_tab or browser_close_tab.
 """  # noqa: E501
 
 
-class BrowserListTabsTool(ToolDefinition[BrowserListTabsAction, BrowserObservation]):
+class BrowserListTabsTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserListTabsAction, BrowserObservation],
+):
     """Tool for listing browser tabs."""
 
     @classmethod
@@ -705,7 +761,10 @@ Parameters:
 """
 
 
-class BrowserSwitchTabTool(ToolDefinition[BrowserSwitchTabAction, BrowserObservation]):
+class BrowserSwitchTabTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserSwitchTabAction, BrowserObservation],
+):
     """Tool for switching browser tabs."""
 
     @classmethod
@@ -747,7 +806,10 @@ Parameters:
 """
 
 
-class BrowserCloseTabTool(ToolDefinition[BrowserCloseTabAction, BrowserObservation]):
+class BrowserCloseTabTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserCloseTabAction, BrowserObservation],
+):
     """Tool for closing browser tabs."""
 
     @classmethod
@@ -787,7 +849,8 @@ Useful for debugging, session management, or extracting authentication tokens.
 
 
 class BrowserGetStorageTool(
-    ToolDefinition[BrowserGetStorageAction, BrowserObservation]
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserGetStorageAction, BrowserObservation],
 ):
     """Tool for getting browser storage."""
 
@@ -835,7 +898,8 @@ Parameters:
 
 
 class BrowserSetStorageTool(
-    ToolDefinition[BrowserSetStorageAction, BrowserObservation]
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserSetStorageAction, BrowserObservation],
 ):
     """Tool for setting browser storage."""
 
@@ -885,7 +949,8 @@ restart on new pages.
 
 
 class BrowserStartRecordingTool(
-    ToolDefinition[BrowserStartRecordingAction, BrowserObservation]
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserStartRecordingAction, BrowserObservation],
 ):
     """Tool for starting browser session recording."""
 
@@ -931,7 +996,8 @@ Returns a summary message with the total event count, file count, and save direc
 
 
 class BrowserStopRecordingTool(
-    ToolDefinition[BrowserStopRecordingAction, BrowserObservation]
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserStopRecordingAction, BrowserObservation],
 ):
     """Tool for stopping browser session recording."""
 
@@ -974,7 +1040,8 @@ browser_stop_video_recording to finalize the file.
 
 
 class BrowserStartVideoRecordingTool(
-    ToolDefinition[BrowserStartVideoRecordingAction, BrowserObservation]
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserStartVideoRecordingAction, BrowserObservation],
 ):
     """Tool for starting encoded browser video recording."""
 
@@ -1017,7 +1084,8 @@ tool when the recording should be attached to a session or pull request.
 
 
 class BrowserStopVideoRecordingTool(
-    ToolDefinition[BrowserStopVideoRecordingAction, BrowserObservation]
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserStopVideoRecordingAction, BrowserObservation],
 ):
     """Tool for stopping encoded browser video recording."""
 
