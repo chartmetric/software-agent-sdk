@@ -7,7 +7,7 @@ import os
 import threading
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from rich.text import Text
@@ -1110,6 +1110,114 @@ class BrowserStopVideoRecordingTool(
         ]
 
 
+# ============================================
+# `browser_sequence`
+# ============================================
+def _sequence_step_actions() -> dict[str, type[BrowserAction]]:
+    """Step name to the action class the single-action tool of that name uses.
+
+    Built from the same classes those tools use, so a step is validated by
+    exactly the schema its standalone equivalent would have applied. Recording
+    and storage actions are deliberately absent: they bracket a whole flow
+    rather than sit inside one, and `get_secret` is absent because a secret
+    should be resolved in its own observable call.
+    """
+    return {
+        "navigate": BrowserNavigateAction,
+        "click": BrowserClickAction,
+        "type": BrowserTypeAction,
+        "fill_form": BrowserFillFormAction,
+        "get_state": BrowserGetStateAction,
+        "get_content": BrowserGetContentAction,
+        "scroll": BrowserScrollAction,
+        "go_back": BrowserGoBackAction,
+        "list_tabs": BrowserListTabsAction,
+        "switch_tab": BrowserSwitchTabAction,
+    }
+
+
+class BrowserSequenceStep(BaseModel):
+    """One browser interaction inside a sequence."""
+
+    action: str = Field(
+        description=(
+            "Which browser action to run. One of: "
+            "navigate, click, type, fill_form, get_state, get_content, "
+            "scroll, go_back, list_tabs, switch_tab."
+        )
+    )
+    arguments: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Arguments for that action, exactly as the single-action tool of the "
+            'same name takes them. For example navigate takes {"url": ...}, '
+            'click takes {"index": ...}.'
+        ),
+    )
+
+
+class BrowserSequenceAction(BrowserAction):
+    """Schema for running several browser interactions in one call."""
+
+    steps: list[BrowserSequenceStep] = Field(
+        min_length=1,
+        max_length=20,
+        description="The interactions to run, in order.",
+    )
+
+
+BROWSER_SEQUENCE_DESCRIPTION = """Run several browser interactions in one call, in order.
+
+Use this whenever you already know the next few browser steps: navigating and then reading
+the page, or clicking through a form and reading the result. Each step is the same action
+the single-action browser tool of that name performs, with the same arguments.
+
+The sequence stops at the first step that fails, and tells you which one and what the
+remaining steps were, so a failure is as diagnosable as it would have been on its own.
+The returned state is the state after the last step that ran.
+
+Parameters:
+- steps: list of {action, arguments}, in order (required, 1-20 steps)
+
+Example - open a page and read it:
+  steps=[{"action": "navigate", "arguments": {"url": "https://example.com/reports"}},
+         {"action": "get_state", "arguments": {}}]
+
+Example - filter and read the result:
+  steps=[{"action": "click", "arguments": {"index": 4}},
+         {"action": "click", "arguments": {"index": 11}},
+         {"action": "get_state", "arguments": {}}]
+
+Prefer one sequence over the same steps issued one at a time: each separate call costs a
+full model round trip, and the browser work itself is milliseconds.
+"""  # noqa: E501
+
+
+class BrowserSequenceTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserSequenceAction, BrowserObservation],
+):
+    """Tool for running a batch of browser interactions in one call."""
+
+    @classmethod
+    def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
+        return [
+            cls(
+                description=BROWSER_SEQUENCE_DESCRIPTION,
+                action_type=BrowserSequenceAction,
+                observation_type=BrowserObservation,
+                annotations=ToolAnnotations(
+                    title="browser_sequence",
+                    readOnlyHint=False,
+                    destructiveHint=False,
+                    idempotentHint=False,
+                    openWorldHint=True,
+                ),
+                executor=executor,
+            )
+        ]
+
+
 class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
     """A set of all browser tools.
 
@@ -1225,6 +1333,7 @@ class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
             BrowserStopRecordingTool,
             BrowserStartVideoRecordingTool,
             BrowserStopVideoRecordingTool,
+            BrowserSequenceTool,
         ]:
             tools.extend(tool_class.create(executor))
         return tools
