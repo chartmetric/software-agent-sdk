@@ -9,12 +9,15 @@ from pydantic import SecretStr
 from openhands.sdk import LLM, Agent
 from openhands.sdk.conversation.impl.local_conversation import LocalConversation
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.event import ActionEvent
 from openhands.sdk.hooks.config import HookConfig, HookDefinition, HookMatcher
+from openhands.sdk.llm import MessageToolCall, TextContent
 from openhands.sdk.subagent.registry import (
     _reset_registry_for_tests,
     register_agent,
 )
 from openhands.sdk.subagent.schema import AgentDefinition
+from openhands.sdk.tool.builtins.finish import FinishAction
 from openhands.tools.preset import register_builtins_agents
 from openhands.tools.task.manager import (
     Task,
@@ -1077,20 +1080,36 @@ def test_a_timed_out_delegation_reports_the_remedy_with_the_partial_answer():
     The parent gets one turn to act on this text, so it carries what to do
     instead, and whatever the delegate had established stays attached -- a
     partial answer is what makes an overrun recoverable rather than wasted.
+
+    This builds real events instead of patching the extractor. The earlier
+    version patched `get_agent_final_response` to return a sentence, which made
+    the test pass while production returned nothing: a delegate stopped by its
+    budget never calls finish and never emits a standalone assistant message, so
+    the *final*-response reader answers "" for exactly these events.
     """
     conv = MagicMock()
-    conv.state.events = []
-
-    with patch(
-        "openhands.tools.task.manager.get_agent_final_response",
-        return_value="Found the venue route at pages/venue/[id]/index.tsx.",
-    ):
-        detail = TaskManager._run_stop_detail(
-            cast(LocalConversation, conv),
-            ConversationExecutionStatus.PAUSED,
-            out_of_time=True,
+    conv.state.events = [
+        ActionEvent(
+            source="agent",
+            thought=[
+                TextContent(text="Found the venue route at pages/venue/[id]/index.tsx.")
+            ],
+            action=FinishAction(message="unused"),
+            tool_name="grep",
+            tool_call_id="call-1",
+            tool_call=MessageToolCall(
+                id="call-1", name="grep", arguments="{}", origin="completion"
+            ),
+            llm_response_id="response-1",
         )
+    ]
 
-    assert 'time budget' in detail
-    assert 'narrower question' in detail
-    assert 'pages/venue/[id]/index.tsx' in detail
+    detail = TaskManager._run_stop_detail(
+        cast(LocalConversation, conv),
+        ConversationExecutionStatus.PAUSED,
+        out_of_time=True,
+    )
+
+    assert "time budget" in detail
+    assert "narrower question" in detail
+    assert "pages/venue/[id]/index.tsx" in detail

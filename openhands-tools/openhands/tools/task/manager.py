@@ -23,7 +23,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from openhands.sdk import Agent
 from openhands.sdk.conversation.impl.local_conversation import LocalConversation
-from openhands.sdk.conversation.response_utils import get_agent_final_response
+from openhands.sdk.conversation.response_utils import (
+    get_agent_final_response,
+    get_agent_partial_response,
+)
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
     ConversationState,
@@ -58,7 +61,15 @@ _SUBAGENTS_DIR: Final[str] = "subagents"
 # in-flight LLM call, so the real ceiling is this plus one step. That is the
 # point. Killing mid-call would lose the partial answer, and a partial answer is
 # what makes an overrun recoverable.
-DELEGATE_WALL_CLOCK_BUDGET_SECONDS: Final[int] = 600
+#
+# The number is measured, not guessed. Across runs 95c13265 and da56288b the
+# slowest *useful* delegation answered in 276s and a narrow one in 190s, while a
+# delegation that ran the full budget returned nothing at all -- so the parent
+# paid 608s for an empty result and then re-asked. Failing sooner is strictly
+# better than failing later when the overrun yields nothing, and 360s clears the
+# slowest observed useful run with margin. Raising it back trades real minutes
+# for delegations that were not going to answer.
+DELEGATE_WALL_CLOCK_BUDGET_SECONDS: Final[int] = 360
 
 
 class TaskStatus(StrEnum):
@@ -423,7 +434,14 @@ class TaskManager:
                 if errors
                 else f"Sub-agent stopped without finishing (status: {status.value})."
             )
-        partial = get_agent_final_response(conversation.state.events)
+        # A timed-out delegate never called finish and left no standalone
+        # assistant message, so the *final*-response reader answers "" for it --
+        # exactly the case this branch exists to salvage.
+        partial = (
+            get_agent_partial_response(conversation.state.events)
+            if out_of_time
+            else get_agent_final_response(conversation.state.events)
+        )
         return f"{reason}\nPartial result:\n{partial}" if partial else reason
 
     def _run_until_finished(
