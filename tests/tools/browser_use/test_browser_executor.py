@@ -698,13 +698,11 @@ async def test_set_viewport_resizes_the_page_already_open() -> None:
 
     from openhands.tools.browser_use.server import CustomBrowserUseServer
 
-    message = await CustomBrowserUseServer._set_viewport(
-        cast(Any, server), 390, 844
-    )
+    message = await CustomBrowserUseServer._set_viewport(cast(Any, server), 390, 844)
 
     page.set_viewport_size.assert_awaited_once_with(390, 844)
     browser_session.start.assert_not_called()
-    assert '390x844' in message
+    assert "390x844" in message
     assert isinstance(BrowserSetViewportAction(width=390, height=844).width, int)
 
 
@@ -716,8 +714,6 @@ async def test_set_viewport_says_so_when_no_page_is_open() -> None:
 
     from openhands.tools.browser_use.server import CustomBrowserUseServer
 
-    message = await CustomBrowserUseServer._set_viewport(
-        cast(Any, server), 390, 844
-    )
+    message = await CustomBrowserUseServer._set_viewport(cast(Any, server), 390, 844)
 
-    assert 'No page is open' in message
+    assert "No page is open" in message

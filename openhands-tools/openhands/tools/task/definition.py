@@ -241,9 +241,7 @@ class TaskToolSet(ToolDefinition[TaskAction, TaskObservation]):
         # Callers may build the tool set without state (tests, and any
         # construction that happens before a conversation exists). No
         # state means no restriction, which is what this did before.
-        allowed = getattr(
-            getattr(conv_state, 'agent', None), 'delegable_agents', None
-        )
+        allowed = getattr(getattr(conv_state, "agent", None), "delegable_agents", None)
 
         agent_types_info = get_factory_info(allowed)
 

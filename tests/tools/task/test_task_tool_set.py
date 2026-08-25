@@ -432,35 +432,35 @@ class TestDelegableAgentAllowlist:
         """
         from openhands.tools.task.definition import TaskAction
 
-        observation = self._executor(['code-explorer'])(
-            TaskAction(prompt='Edit the venue table.', subagent_type='general-purpose')
+        observation = self._executor(["code-explorer"])(
+            TaskAction(prompt="Edit the venue table.", subagent_type="general-purpose")
         )
 
         assert observation.is_error
         text = str(observation)
         # The refusal names what it will take instead, so the turn that reads it
         # can act rather than go looking.
-        assert 'code-explorer' in text
-        assert 'general-purpose' in text
+        assert "code-explorer" in text
+        assert "general-purpose" in text
 
     def test_an_allowed_sub_agent_is_not_refused_by_the_allowlist(self):
         """The gate only blocks; it does not stand in for running the task."""
         from openhands.tools.task.definition import TaskAction
 
-        observation = self._executor(['code-explorer'])(
-            TaskAction(prompt='Trace the venue route.', subagent_type='code-explorer')
+        observation = self._executor(["code-explorer"])(
+            TaskAction(prompt="Trace the venue route.", subagent_type="code-explorer")
         )
 
         # It may still fail for its own reasons here (no real conversation), but
         # never with the allowlist's refusal.
-        assert 'cannot be delegated to' not in str(observation)
+        assert "cannot be delegated to" not in str(observation)
 
     def test_no_allowlist_leaves_every_registered_agent_available(self):
         """Absent restriction keeps the previous behaviour exactly."""
         from openhands.tools.task.definition import TaskAction
 
         observation = self._executor(None)(
-            TaskAction(prompt='Anything.', subagent_type='general-purpose')
+            TaskAction(prompt="Anything.", subagent_type="general-purpose")
         )
 
-        assert 'cannot be delegated to' not in str(observation)
+        assert "cannot be delegated to" not in str(observation)

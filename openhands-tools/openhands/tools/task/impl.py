@@ -20,9 +20,7 @@ logger = get_logger(__name__)
 class TaskExecutor(ToolExecutor):
     """Executor for the Task tool (blocking only)."""
 
-    def __init__(
-        self, manager: TaskManager, allowed_agents: list[str] | None = None
-    ):
+    def __init__(self, manager: TaskManager, allowed_agents: list[str] | None = None):
         self._manager = manager
         self._allowed_agents = allowed_agents
 
