@@ -138,6 +138,12 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/BrowserSetViewportTool/properties/meta/anyOf/0/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/BrowserSetStorageAction/properties/storage_state/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Existing extensible or opaque public payload tracked by the weak-type ratchet.",
