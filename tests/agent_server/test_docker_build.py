@@ -1,6 +1,5 @@
 """Tests for agent_server docker build module."""
 
-import json
 import os
 import subprocess
 import tarfile
@@ -43,16 +42,10 @@ def test_browser_image_disables_password_manager_prompts():
         repo_root / "openhands-agent-server" / "openhands" / "agent_server" / "docker"
     )
 
-    policy = json.loads(
-        (docker_dir / "chromium-policies.json").read_text(encoding="utf-8")
-    )
     dockerfile = (docker_dir / "Dockerfile").read_text(encoding="utf-8")
 
-    assert policy == {"PasswordManagerEnabled": False}
-    assert (
-        "COPY openhands-agent-server/openhands/agent_server/docker/"
-        "chromium-policies.json /etc/chromium/policies/managed/pilot.json" in dockerfile
-    )
+    assert "'{\"PasswordManagerEnabled\":false}'" in dockerfile
+    assert "> /etc/chromium/policies/managed/pilot.json" in dockerfile
 
 
 def _create_fake_sdist(tmp_path: Path) -> Path:
