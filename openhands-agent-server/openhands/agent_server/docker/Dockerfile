@@ -341,6 +341,8 @@ ENV NOVNC_WEB=/usr/share/novnc \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage --disable-gpu"
 
+COPY openhands-agent-server/openhands/agent_server/docker/chromium-policies.json /etc/chromium/policies/managed/pilot.json
+
 RUN chown -R ${USERNAME}:${USERNAME} ${NOVNC_WEB}
 # Override default XFCE wallpaper
 COPY --chown=${USERNAME}:${USERNAME} openhands-agent-server/openhands/agent_server/docker/wallpaper.svg /usr/share/backgrounds/xfce/xfce-shapes.svg
