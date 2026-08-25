@@ -712,6 +712,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             BrowserNavigateAction,
             BrowserObservation,
             BrowserScrollAction,
+            BrowserSetViewportAction,
             BrowserSetStorageAction,
             BrowserStartRecordingAction,
             BrowserStartVideoRecordingAction,
@@ -778,6 +779,8 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                 )
             elif isinstance(action, BrowserScrollAction):
                 result = await self.scroll(action.direction)
+            elif isinstance(action, BrowserSetViewportAction):
+                result = await self.set_viewport(action.width, action.height)
             elif isinstance(action, BrowserGoBackAction):
                 result = await self.go_back()
             elif isinstance(action, BrowserListTabsAction):
@@ -938,6 +941,11 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         """Scroll the page."""
         await self._ensure_initialized()
         return await self._server._scroll(direction)
+
+    async def set_viewport(self, width: int, height: int) -> str:
+        """Re-render the open page at another viewport size."""
+        await self._ensure_initialized()
+        return await self._server._set_viewport(width, height)
 
     async def _browser_state_payload(
         self, include_screenshot: bool

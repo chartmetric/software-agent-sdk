@@ -673,6 +673,64 @@ class BrowserScrollTool(
 
 
 # ============================================
+# `browser_set_viewport`
+# ============================================
+class BrowserSetViewportAction(BrowserAction):
+    """Schema for re-rendering the open page at another viewport size."""
+
+    width: int = Field(
+        ge=320,
+        le=3840,
+        description="Viewport width in CSS pixels. A phone is about 390.",
+    )
+    height: int = Field(
+        ge=400,
+        le=2160,
+        description="Viewport height in CSS pixels. A phone is about 844.",
+    )
+
+
+BROWSER_SET_VIEWPORT_DESCRIPTION = """Re-render the page already open at a different viewport size.
+
+Use this to see a responsive layout the way a narrower device renders it, for example
+390x844 for a phone. The page keeps its signed-in session, so this costs a resize rather
+than another login.
+
+Width is the one rendering condition no control on the page can supply. A theme is not set
+here: a product that offers dark mode ships a toggle, so switch it by clicking it.
+
+Parameters:
+- width: viewport width in CSS pixels
+- height: viewport height in CSS pixels
+"""  # noqa: E501
+
+
+class BrowserSetViewportTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserSetViewportAction, BrowserObservation],
+):
+    """Tool for re-rendering the open page at another viewport size."""
+
+    @classmethod
+    def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
+        return [
+            cls(
+                description=BROWSER_SET_VIEWPORT_DESCRIPTION,
+                action_type=BrowserSetViewportAction,
+                observation_type=BrowserObservation,
+                annotations=ToolAnnotations(
+                    title="browser_set_viewport",
+                    readOnlyHint=False,
+                    destructiveHint=False,
+                    idempotentHint=True,
+                    openWorldHint=True,
+                ),
+                executor=executor,
+            )
+        ]
+
+
+# ============================================
 # `browser_go_back`
 # ============================================
 class BrowserGoBackAction(BrowserAction):
@@ -1350,6 +1408,7 @@ class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
             BrowserTypeTool,
             BrowserFillFormTool,
             BrowserScrollTool,
+            BrowserSetViewportTool,
             BrowserGoBackTool,
             BrowserListTabsTool,
             BrowserSwitchTabTool,

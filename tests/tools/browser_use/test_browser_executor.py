@@ -681,3 +681,43 @@ async def test_a_click_still_succeeds_when_the_page_cannot_be_read(
     )
 
     assert_browser_observation_success(result, "Click successful")
+
+
+async def test_set_viewport_resizes_the_page_already_open() -> None:
+    """A narrower render reuses the signed-in page instead of a fresh session.
+
+    A second session would have to log in again before it could show the surface
+    under review, so a mobile capture taken there is a login page.
+    """
+    from openhands.tools.browser_use.definition import BrowserSetViewportAction
+
+    page = AsyncMock()
+    browser_session = AsyncMock()
+    browser_session.get_current_page = AsyncMock(return_value=page)
+    server = SimpleNamespace(browser_session=browser_session)
+
+    from openhands.tools.browser_use.server import CustomBrowserUseServer
+
+    message = await CustomBrowserUseServer._set_viewport(
+        cast(Any, server), 390, 844
+    )
+
+    page.set_viewport_size.assert_awaited_once_with(390, 844)
+    browser_session.start.assert_not_called()
+    assert '390x844' in message
+    assert isinstance(BrowserSetViewportAction(width=390, height=844).width, int)
+
+
+async def test_set_viewport_says_so_when_no_page_is_open() -> None:
+    """A resize with nothing open is reported, not raised as an unread failure."""
+    browser_session = AsyncMock()
+    browser_session.get_current_page = AsyncMock(return_value=None)
+    server = SimpleNamespace(browser_session=browser_session)
+
+    from openhands.tools.browser_use.server import CustomBrowserUseServer
+
+    message = await CustomBrowserUseServer._set_viewport(
+        cast(Any, server), 390, 844
+    )
+
+    assert 'No page is open' in message

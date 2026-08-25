@@ -104,6 +104,27 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
         """
         self._inject_scripts = scripts
 
+    async def _set_viewport(self, width: int, height: int) -> str:
+        """Render the page already open at another width.
+
+        A responsive layout is the one thing no control on the page can reveal:
+        a product ships a theme toggle, but nothing in it makes the window
+        narrow. Without this the browser could only ever render one width, so a
+        mobile layout was unobservable rather than merely unverified.
+
+        Applied to the session already signed in, because a fresh one would have
+        to log in again before it could show the surface under review.
+        """
+        if not self.browser_session:
+            return "Error: No browser session active"
+
+        page = await self.browser_session.get_current_page()
+        if page is None:
+            return "Error: No page is open to resize"
+
+        await page.set_viewport_size(width, height)
+        return f"Viewport set to {width}x{height}"
+
     async def _type_secret_text(self, index: int, text: str) -> str:
         if not self.browser_session:
             return "Error: No browser session active"
