@@ -212,6 +212,9 @@ Parameters:
 Examples:
 - Navigate to Google: url="https://www.google.com"
 - Open GitHub in new tab: url="https://github.com", new_tab=True
+
+Returns the resulting page state, so a following browser_get_state call is
+redundant: read the state in this tool's own result.
 """  # noqa: E501
 
 
@@ -260,11 +263,16 @@ BROWSER_CLICK_DESCRIPTION = """Click an element on the page by its index.
 Use this tool to click on interactive elements like buttons, links, or form controls. 
 The index comes from the browser_get_state tool output.
 
+Returns the resulting page state, so a following browser_get_state call is
+redundant: read the state in this tool's own result and pick the next index from
+it.
+
 Parameters:
 - index: The index of the element to click (from browser_get_state)
 - new_tab: Whether to open any resulting navigation in a new tab (optional)
 
-Important: Only use indices that appear in your current browser_get_state output.
+Important: Only use indices that appear in the most recent browser state you were
+given, whether that came from browser_get_state or from the previous action.
 """  # noqa: E501
 
 
@@ -336,6 +344,9 @@ Parameters:
 - json_field: Optional top-level JSON string field to type from the registered secret
 
 Important: Only use indices that appear in your current browser_get_state output.
+
+Returns the resulting page state, so a following browser_get_state call is
+redundant: read the state in this tool's own result.
 """  # noqa: E501
 
 
@@ -630,6 +641,9 @@ to see more content.
 
 Parameters:
 - direction: Direction to scroll - "up" or "down" (optional, default: "down")
+
+Returns the resulting page state, so a following browser_get_state call is
+redundant: read the state in this tool's own result.
 """  # noqa: E501
 
 
@@ -671,6 +685,9 @@ BROWSER_GO_BACK_DESCRIPTION = """Go back to the previous page in browser history
 
 Use this tool to navigate back to the previously visited page, similar to clicking the 
 browser's back button.
+
+Returns the resulting page state, so a following browser_get_state call is
+redundant: read the state in this tool's own result.
 """  # noqa: E501
 
 
@@ -758,6 +775,9 @@ Use this tool to switch between open tabs. Get the tab_id from browser_list_tabs
 
 Parameters:
 - tab_id: 4 Character Tab ID of the tab to switch to
+
+Returns the resulting page state, so a following browser_get_state call is
+redundant: read the state in this tool's own result.
 """
 
 
@@ -803,6 +823,9 @@ Use this tool to close tabs you no longer need. Get the tab_id from browser_list
 
 Parameters:
 - tab_id: 4 Character Tab ID of the tab to close
+
+Returns the resulting page state, so a following browser_get_state call is
+redundant: read the state in this tool's own result.
 """
 
 

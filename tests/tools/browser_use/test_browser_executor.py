@@ -14,6 +14,7 @@ from urllib.request import urlopen
 
 import pytest
 
+from openhands.sdk.tool.schema import TextContent
 from openhands.sdk.utils.async_executor import AsyncExecutor
 from openhands.tools.browser_use.definition import (
     BrowserClickAction,
@@ -631,3 +632,52 @@ async def test_stop_recording_without_active_session_returns_error():
 
     assert "Error" in result
     assert "Not recording" in result
+
+
+@patch("openhands.tools.browser_use.impl.BrowserToolExecutor.click")
+async def test_a_click_returns_the_page_it_produced(mock_click, mock_browser_executor):
+    """A state-changing action answers "what happened" itself.
+
+    Every such action used to return only what it did, so the run followed it
+    with `browser_get_state` purely to see the result: measured across
+    production runs, 27-35 of those per run at 7-9 seconds of model latency
+    each. `fill_form` already returned its final state; this is the same shape
+    for the rest.
+    """
+    mock_click.return_value = "Click successful"
+    mock_browser_executor._server._get_browser_state = AsyncMock(
+        return_value='{"interactive_elements": [{"index": 7, "text": "Next"}]}'
+    )
+
+    result = await mock_browser_executor._execute_action(
+        BrowserClickAction(index=5, new_tab=False)
+    )
+
+    text = "".join(
+        block.text for block in result.content if isinstance(block, TextContent)
+    )
+    assert "Click successful" in text
+    # The next index is available without a second round trip.
+    assert '"index": 7' in text
+
+
+@patch("openhands.tools.browser_use.impl.BrowserToolExecutor.click")
+async def test_a_click_still_succeeds_when_the_page_cannot_be_read(
+    mock_click, mock_browser_executor
+):
+    """Reading the produced page is an optimisation, not a precondition.
+
+    The click has already happened by then. If the state read fails, saying so
+    as an error would discard a result the caller needs and report a successful
+    action as failed, so it degrades to what this returned before.
+    """
+    mock_click.return_value = "Click successful"
+    mock_browser_executor._server._get_browser_state = AsyncMock(
+        side_effect=RuntimeError("target closed")
+    )
+
+    result = await mock_browser_executor._execute_action(
+        BrowserClickAction(index=5, new_tab=False)
+    )
+
+    assert_browser_observation_success(result, "Click successful")
