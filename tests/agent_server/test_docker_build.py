@@ -36,6 +36,18 @@ BUILDKIT_STDERR_SAMPLE = "\n".join(
 )
 
 
+def test_browser_image_disables_password_manager_prompts():
+    repo_root = Path(__file__).resolve().parents[2]
+    docker_dir = (
+        repo_root / "openhands-agent-server" / "openhands" / "agent_server" / "docker"
+    )
+
+    dockerfile = (docker_dir / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "'{\"PasswordManagerEnabled\":false}'" in dockerfile
+    assert "> /etc/chromium/policies/managed/pilot.json" in dockerfile
+
+
 def _create_fake_sdist(tmp_path: Path) -> Path:
     src_root = tmp_path / "openhands-sdk-test"
     src_root.mkdir()
