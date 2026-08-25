@@ -300,6 +300,24 @@ class AgentBase(DiscriminatedUnionMixin, ABC):
         ),
     )
 
+    delegable_agents: list[str] | None = Field(
+        default=None,
+        description=(
+            "Sub-agent names this agent may delegate to, or None for every "
+            "registered one. The registry is process-wide and is populated at "
+            "import with the builtins, so a caller that sends its own agent "
+            "definitions cannot narrow what is available by sending fewer -- "
+            "`register_agent_if_absent` will not displace what is already "
+            "there. This is how a conversation says which of them it will "
+            "actually accept. It matters because the builtins are not "
+            "interchangeable: `general-purpose` carries `file_editor` and "
+            "`bash-runner` carries `terminal`, so either can edit the worktree "
+            "the parent is mid-change in, while `code-explorer` is terminal-only "
+            "and read-only by its own definition. An empty list disables "
+            "delegation."
+        ),
+    )
+
     # Runtime materialized tools; private and non-serializable
     _tools: dict[str, ToolDefinition] = PrivateAttr(default_factory=dict)
     _tools_lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)

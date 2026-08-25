@@ -415,10 +415,24 @@ def get_agent_factory(name: str | None) -> AgentFactory:
     return factory
 
 
-def get_factory_info() -> str:
-    """Get formatted information about available agent factories."""
+def get_factory_info(allowed: list[str] | None = None) -> str:
+    """Get formatted information about available agent factories.
+
+    ``allowed`` narrows the listing to the names a caller will actually accept.
+    The registry is process-wide and holds the builtins from import onwards, so
+    a conversation that may only delegate to some of them has to say which --
+    advertising the rest would offer the model a type its own executor refuses.
+    """
     with _registry_lock:
         user_factories = dict(_agent_factories)
+
+    if allowed is not None:
+        permitted = set(allowed)
+        user_factories = {
+            name: factory
+            for name, factory in user_factories.items()
+            if name in permitted
+        }
 
     if not user_factories:
         return "- No user-registered agents yet. Call register_agent(...) to add custom agents."  # noqa: E501

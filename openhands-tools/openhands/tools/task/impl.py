@@ -20,14 +20,38 @@ logger = get_logger(__name__)
 class TaskExecutor(ToolExecutor):
     """Executor for the Task tool (blocking only)."""
 
-    def __init__(self, manager: TaskManager):
+    def __init__(
+        self, manager: TaskManager, allowed_agents: list[str] | None = None
+    ):
         self._manager = manager
+        self._allowed_agents = allowed_agents
 
     def __call__(
         self,
         action: TaskAction,
         conversation: LocalConversation | None = None,
     ) -> TaskObservation:
+        if (
+            self._allowed_agents is not None
+            and action.subagent_type not in self._allowed_agents
+        ):
+            # Enforced here rather than only left out of the tool description:
+            # the registry is process-wide, so a name this conversation does not
+            # permit still resolves, and a delegate carrying `file_editor` would
+            # edit the worktree its parent is mid-change in. Naming the ones that
+            # are allowed keeps the refusal actionable in the turn that reads it.
+            permitted = ", ".join(sorted(self._allowed_agents)) or "none"
+            return TaskObservation.from_text(
+                text=(
+                    f"'{action.subagent_type}' cannot be delegated to from this "
+                    f"conversation. Available: {permitted}. Delegate the "
+                    "read-only investigation and keep the change yourself."
+                ),
+                task_id="",
+                subagent=action.subagent_type,
+                status=TaskStatus.ERROR,
+                is_error=True,
+            )
         try:
             task = self._manager.start_task(
                 prompt=action.prompt,

@@ -408,3 +408,59 @@ class TestTaskToolExamples:
         description = tools[0].description
         assert TASK_TOOL_EXAMPLES[included_name].strip() in description
         assert TASK_TOOL_EXAMPLES[excluded_name].strip() not in description
+
+
+class TestDelegableAgentAllowlist:
+    """A conversation decides which sub-agents it will accept."""
+
+    def _executor(self, allowed):
+        from openhands.tools.task.impl import TaskExecutor
+        from openhands.tools.task.manager import TaskManager
+
+        return TaskExecutor(manager=TaskManager(), allowed_agents=allowed)
+
+    def test_a_withheld_sub_agent_is_refused_by_the_executor(self):
+        """Leaving a type out of the description is not enough to withhold it.
+
+        The sub-agent registry is process-wide and holds the builtins from
+        import onward, so a name this conversation never offered still resolves
+        -- `register_agent_if_absent` will not displace what is already there.
+        Enforcing only in the description would let a model that names
+        `general-purpose` anyway get one, and `general-purpose` carries
+        `file_editor`: it can edit the worktree its parent is mid-change in,
+        concurrently.
+        """
+        from openhands.tools.task.definition import TaskAction
+
+        observation = self._executor(['code-explorer'])(
+            TaskAction(prompt='Edit the venue table.', subagent_type='general-purpose')
+        )
+
+        assert observation.is_error
+        text = str(observation)
+        # The refusal names what it will take instead, so the turn that reads it
+        # can act rather than go looking.
+        assert 'code-explorer' in text
+        assert 'general-purpose' in text
+
+    def test_an_allowed_sub_agent_is_not_refused_by_the_allowlist(self):
+        """The gate only blocks; it does not stand in for running the task."""
+        from openhands.tools.task.definition import TaskAction
+
+        observation = self._executor(['code-explorer'])(
+            TaskAction(prompt='Trace the venue route.', subagent_type='code-explorer')
+        )
+
+        # It may still fail for its own reasons here (no real conversation), but
+        # never with the allowlist's refusal.
+        assert 'cannot be delegated to' not in str(observation)
+
+    def test_no_allowlist_leaves_every_registered_agent_available(self):
+        """Absent restriction keeps the previous behaviour exactly."""
+        from openhands.tools.task.definition import TaskAction
+
+        observation = self._executor(None)(
+            TaskAction(prompt='Anything.', subagent_type='general-purpose')
+        )
+
+        assert 'cannot be delegated to' not in str(observation)

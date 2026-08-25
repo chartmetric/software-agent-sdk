@@ -216,7 +216,7 @@ class TaskToolSet(ToolDefinition[TaskAction, TaskObservation]):
     @classmethod
     def create(
         cls,
-        conv_state: "ConversationState",  # noqa: ARG003
+        conv_state: "ConversationState",
         confirmation_handler: "ConfirmationHandler | None" = None,
     ) -> list[ToolDefinition]:
         """Create the task tool.
@@ -233,9 +233,23 @@ class TaskToolSet(ToolDefinition[TaskAction, TaskObservation]):
         """
         from openhands.tools.task.impl import TaskExecutor, TaskManager
 
-        agent_types_info = get_factory_info()
+        # What this conversation will actually accept, which is not necessarily
+        # what the process has registered: the builtins land in the registry at
+        # import and cannot be displaced by sending fewer definitions, so a run
+        # that may only delegate read-only work says so here. Advertising a type
+        # the executor would refuse just spends a turn discovering the refusal.
+        # Callers may build the tool set without state (tests, and any
+        # construction that happens before a conversation exists). No
+        # state means no restriction, which is what this did before.
+        allowed = getattr(
+            getattr(conv_state, 'agent', None), 'delegable_agents', None
+        )
+
+        agent_types_info = get_factory_info(allowed)
 
         registered = {d.name for d in get_registered_agent_definitions()}
+        if allowed is not None:
+            registered &= set(allowed)
         task_tool_examples = "\n".join(
             ex for name, ex in TASK_TOOL_EXAMPLES.items() if name in registered
         )
@@ -246,7 +260,7 @@ class TaskToolSet(ToolDefinition[TaskAction, TaskObservation]):
         )
 
         manager = TaskManager(confirmation_handler=confirmation_handler)
-        task_executor = TaskExecutor(manager=manager)
+        task_executor = TaskExecutor(manager=manager, allowed_agents=allowed)
 
         tools: list[ToolDefinition] = []
         tools.extend(
