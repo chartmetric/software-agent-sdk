@@ -46,6 +46,21 @@ logger = get_logger(__name__)
 _SUBAGENTS_DIR: Final[str] = "subagents"
 
 
+# Wall clock a single delegation may hold its parent for. A delegate is bounded
+# by `max_iteration_per_run`, which bounds work rather than time: measured in
+# production, two concurrent delegations held a run for 40 minutes with no event
+# reaching the control plane, so from outside a working delegation and a dead one
+# looked identical. Iterations cannot express that, because one slow step -- an
+# LLM retry ladder, a stuck command -- costs the same single iteration as a fast
+# one.
+#
+# The pause is soft: it lands between agent steps and never interrupts an
+# in-flight LLM call, so the real ceiling is this plus one step. That is the
+# point. Killing mid-call would lose the partial answer, and a partial answer is
+# what makes an overrun recoverable.
+DELEGATE_WALL_CLOCK_BUDGET_SECONDS: Final[int] = 600
+
+
 class TaskStatus(StrEnum):
     """Represents the lifecycle states of a task."""
 
@@ -355,7 +370,7 @@ class TaskManager:
 
         try:
             task.conversation.send_message(prompt, sender=parent_name)
-            self._run_until_finished(task.id, task.conversation)
+            out_of_time = self._run_until_finished(task.id, task.conversation)
             status = task.conversation.state.execution_status
             if status == ConversationExecutionStatus.FINISHED:
                 result = get_agent_final_response(task.conversation.state.events)
@@ -365,7 +380,9 @@ class TaskManager:
                 # Any non-FINISHED terminal status (run-limit, stuck, paused, ...)
                 # is surfaced as an error, not an empty "completed"; the detail
                 # keeps partial output so the parent can use/retry it.
-                task.set_error(self._run_stop_detail(task.conversation, status))
+                task.set_error(
+                    self._run_stop_detail(task.conversation, status, out_of_time)
+                )
                 logger.warning(f"Task '{task.id}' stopped: status '{status.value}'.")
         except Exception as e:
             task.set_error(str(e))
@@ -380,6 +397,7 @@ class TaskManager:
     def _run_stop_detail(
         conversation: LocalConversation,
         status: ConversationExecutionStatus,
+        out_of_time: bool = False,
     ) -> str:
         """Why a sub-agent stopped without finishing (run-limit, stuck, paused, ...),
         plus any partial output so the parent isn't left with nothing to use."""
@@ -388,18 +406,57 @@ class TaskManager:
             for e in conversation.state.events
             if isinstance(e, ConversationErrorEvent)
         ]
-        reason = (
-            errors[-1].detail
-            if errors
-            else f"Sub-agent stopped without finishing (status: {status.value})."
-        )
+        if out_of_time:
+            # Naming only the condition sends the parent into re-running the same
+            # question, which is the thing that just ran out of time. The remedy
+            # travels with it.
+            reason = (
+                f"Sub-agent stopped after its "
+                f"{DELEGATE_WALL_CLOCK_BUDGET_SECONDS}s time budget. Anything "
+                "below is what it had established by then. Do not re-issue the "
+                "same delegation: ask a narrower question, or investigate the "
+                "remaining part directly."
+            )
+        else:
+            reason = (
+                errors[-1].detail
+                if errors
+                else f"Sub-agent stopped without finishing (status: {status.value})."
+            )
         partial = get_agent_final_response(conversation.state.events)
         return f"{reason}\nPartial result:\n{partial}" if partial else reason
 
     def _run_until_finished(
         self, task_id: str, conversation: LocalConversation
-    ) -> None:
-        """Run a sub-agent conversation to completion, handling confirmations."""
+    ) -> bool:
+        """Run a sub-agent to completion. Returns whether its time budget ran out.
+
+        `pause` is thread-safe and takes effect between agent steps, so the timer
+        stops the delegate at the next boundary rather than tearing it out of an
+        LLM call. Whatever it had produced by then still reaches the parent
+        through the non-FINISHED path.
+        """
+        out_of_time = threading.Event()
+
+        def _stop_for_time() -> None:
+            out_of_time.set()
+            conversation.pause()
+
+        timer = threading.Timer(DELEGATE_WALL_CLOCK_BUDGET_SECONDS, _stop_for_time)
+        timer.daemon = True
+        timer.start()
+        try:
+            return self._run_confirmation_loop(task_id, conversation, out_of_time)
+        finally:
+            timer.cancel()
+
+    def _run_confirmation_loop(
+        self,
+        task_id: str,
+        conversation: LocalConversation,
+        out_of_time: threading.Event,
+    ) -> bool:
+        """Run the sub-agent, answering confirmations until it settles."""
         conversation.run()
         while (
             conversation.state.execution_status
@@ -409,6 +466,10 @@ class TaskManager:
             if not pending:
                 break
 
+            if out_of_time.is_set():
+                # Resuming here would restart a delegate the budget just stopped.
+                break
+
             if self._confirmation_handler is None or self._confirmation_handler(
                 task_id, pending
             ):
@@ -416,6 +477,7 @@ class TaskManager:
             else:
                 conversation.reject_pending_actions("User rejected the actions")
                 conversation.run()
+        return out_of_time.is_set()
 
     def _set_confirmation_policy(
         self,

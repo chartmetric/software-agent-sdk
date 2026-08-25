@@ -1032,3 +1032,65 @@ class TestRunErrorSurfacing:
             cast(LocalConversation, conv), ConversationExecutionStatus.STUCK
         )
         assert "stuck" in detail.lower()
+
+
+def test_a_delegation_that_runs_long_is_stopped_and_says_so():
+    """A delegate is bounded by time, not only by iterations.
+
+    `max_iteration_per_run` bounds work, not duration: one slow step -- an LLM
+    retry ladder, a stuck command -- costs the same single iteration as a fast
+    one. Measured in production, two concurrent delegations held their parent
+    for 40 minutes while no event reached the control plane, so from outside a
+    working delegation was indistinguishable from a dead one.
+    """
+    import threading
+
+    from openhands.tools.task import manager as manager_module
+
+    conv = MagicMock()
+    conv.state.execution_status = ConversationExecutionStatus.RUNNING
+    started = threading.Event()
+
+    def _slow_run():
+        started.set()
+        # Longer than the budget below; the timer must not wait for it.
+        threading.Event().wait(2.0)
+        conv.state.execution_status = ConversationExecutionStatus.PAUSED
+
+    conv.run.side_effect = _slow_run
+    conv.pause.side_effect = lambda: None
+
+    task_manager = TaskManager()
+    with patch.object(manager_module, "DELEGATE_WALL_CLOCK_BUDGET_SECONDS", 0.1):
+        out_of_time = task_manager._run_until_finished(
+            "task-1", cast(LocalConversation, conv)
+        )
+
+    assert started.is_set()
+    assert out_of_time is True
+    conv.pause.assert_called()
+
+
+def test_a_timed_out_delegation_reports_the_remedy_with_the_partial_answer():
+    """Saying only that time ran out invites re-running the same slow question.
+
+    The parent gets one turn to act on this text, so it carries what to do
+    instead, and whatever the delegate had established stays attached -- a
+    partial answer is what makes an overrun recoverable rather than wasted.
+    """
+    conv = MagicMock()
+    conv.state.events = []
+
+    with patch(
+        "openhands.tools.task.manager.get_agent_final_response",
+        return_value="Found the venue route at pages/venue/[id]/index.tsx.",
+    ):
+        detail = TaskManager._run_stop_detail(
+            cast(LocalConversation, conv),
+            ConversationExecutionStatus.PAUSED,
+            out_of_time=True,
+        )
+
+    assert 'time budget' in detail
+    assert 'narrower question' in detail
+    assert 'pages/venue/[id]/index.tsx' in detail
