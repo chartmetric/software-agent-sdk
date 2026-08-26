@@ -662,6 +662,25 @@ class TestTaskMetrics:
         sub_agent.llm.metrics.add_cost(1.00)
         assert parent_llm.metrics.accumulated_cost == before
 
+    def test_sub_agent_gets_a_bounded_retry_ladder(self, tmp_path):
+        """A delegate must not inherit the parent's retry ladder.
+
+        A retry regenerates from scratch, so an inherited 40-attempt ladder can
+        consume a delegation's whole wall-clock budget while producing no events
+        at all. Bounding it must not touch the parent, whose long ladder is
+        deliberate: there, an exhausted ladder means a review posts nothing.
+        """
+        from openhands.tools.task import manager as manager_module
+
+        manager, parent = _manager_with_parent(tmp_path)
+        register_builtins_agents()
+        parent_retries = parent.agent.llm.num_retries
+
+        sub_agent = manager._get_sub_agent("general-purpose")
+
+        assert sub_agent.llm.num_retries == manager_module.DELEGATE_LLM_RETRIES
+        assert parent.agent.llm.num_retries == parent_retries
+
     def test_run_task_merges_metrics_into_parent(self, tmp_path):
         """After _run_task, sub-agent metrics appear in parent stats."""
         manager, parent = _manager_with_parent(tmp_path)

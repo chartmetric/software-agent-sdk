@@ -62,14 +62,52 @@ _SUBAGENTS_DIR: Final[str] = "subagents"
 # point. Killing mid-call would lose the partial answer, and a partial answer is
 # what makes an overrun recoverable.
 #
-# The number is measured, not guessed. Across runs 95c13265 and da56288b the
-# slowest *useful* delegation answered in 276s and a narrow one in 190s, while a
-# delegation that ran the full budget returned nothing at all -- so the parent
-# paid 608s for an empty result and then re-asked. Failing sooner is strictly
-# better than failing later when the overrun yields nothing, and 360s clears the
-# slowest observed useful run with margin. Raising it back trades real minutes
-# for delegations that were not going to answer.
-DELEGATE_WALL_CLOCK_BUDGET_SECONDS: Final[int] = 360
+# The budget exists because a delegation that ran unbounded returned nothing at
+# all: in run da56288b the parent paid 608s for an empty result and then
+# re-asked. Failing sooner is better than failing later when the overrun yields
+# nothing.
+#
+# How long to allow is bounded from below by observation. An earlier revision
+# used 360s on the claim that it "clears the slowest observed useful run with
+# margin", from a sample whose slowest useful delegation was 276s. Production run
+# d07ba62a falsified that directly: within one run a delegation finished at 363s
+# and returned 11,719 chars, while another was cut at 365s. Two seconds separated
+# a complete answer from a truncated one, so 360 was not margin -- it sat on the
+# boundary and was discarding finished work.
+#
+# 480s keeps the 608s case bounded while clearing the observed 363s answer. It is
+# a judgement, not a measured optimum, for two reasons. The delegations cut at
+# 365s and 374s might have answered at 380s or run to 600 -- nothing distinguishes
+# those cases from outside. And every one of those measurements was taken on
+# openrouter/openai/gpt-5.6-sol; the configured model has since changed, which
+# moves step latency and therefore moves this boundary. Re-measure before
+# treating any number here as tuned.
+#
+# The asymmetry is what justifies erring high: an unnecessary raise costs a stuck
+# delegation two extra minutes, while a cut that was too early discards an answer
+# the parent then has to pay to produce again. Partial capture softens that but
+# does not undo it -- what survives a cut is the sub-agent's next intent, not its
+# findings.
+DELEGATE_WALL_CLOCK_BUDGET_SECONDS: Final[int] = 480
+
+# A delegate must not inherit the parent's retry ladder. `num_retries` defaults to
+# 40 on the control path because a control turn has 1800s and an exhausted ladder
+# there means an automatic review silently posts nothing -- the turn's deadline is
+# meant to be the only thing that ends an attempt. A delegation is the opposite
+# shape: it has a wall clock measured in minutes, and when it returns empty the
+# parent can re-ask or investigate directly.
+#
+# Inherited, the ladder is unbounded relative to the budget: 40 attempts at the
+# 120s request ceiling is far more than any delegation is allowed to live, and a
+# retry regenerates from scratch, so a delegate can spend its entire budget
+# producing no events and answer nothing. That is one identified mechanism for the
+# empty overrun this budget exists to bound, and it is invisible from outside --
+# a delegate deep in a ladder looks exactly like one thinking hard.
+#
+# Three attempts still absorb the ordinary transient failure (the common case
+# succeeds on the first retry) while making it arithmetically impossible for the
+# ladder alone to outlast the wall clock unnoticed.
+DELEGATE_LLM_RETRIES: Final[int] = 3
 
 
 class TaskStatus(StrEnum):
@@ -355,7 +393,10 @@ class TaskManager:
         parent = self.parent_conversation
         parent_llm = parent.agent.llm
 
-        llm_updates: dict = {"stream": False}
+        llm_updates: dict = {
+            "stream": False,
+            "num_retries": DELEGATE_LLM_RETRIES,
+        }
         sub_agent_llm = parent_llm.model_copy(update=llm_updates)
         # Reset metrics such that the sub-agent has its own
         # Metrics object
