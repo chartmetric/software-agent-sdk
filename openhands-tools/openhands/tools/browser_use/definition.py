@@ -539,10 +539,20 @@ class BrowserGetStateAction(BrowserAction):
     )
 
 
-BROWSER_GET_STATE_DESCRIPTION = """Get the current state of the page including all interactive elements.
+BROWSER_GET_STATE_DESCRIPTION = """Get the page's interactive elements and where on the page you are reading them.
 
-This tool returns the current page content with numbered interactive elements that you can 
-click or type into. Use this frequently to understand what's available on the page.
+Returns the numbered interactive elements you can click or type into, and with
+them `scroll`, `page`, `pages_above` and `pages_below`. Use it frequently.
+
+What it returns is not the whole page, and the two ways it is partial are the
+ways an absence gets called wrongly:
+
+- Only interactive elements. Headings, labels, body copy and anything else that
+  is not clickable or typeable are absent from this result whatever the page
+  shows. Use browser_get_content to read text.
+- Only what is reachable at the current scroll position. `pages_below` says how
+  many more screens are under you; scroll and read again before concluding that
+  something is not on the page.
 
 Parameters:
 - include_screenshot: Whether to include a screenshot (optional, default: False)

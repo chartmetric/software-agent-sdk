@@ -268,6 +268,65 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
             return
         await self._screencast_session.dispatch_key(**kwargs)
 
+    async def _get_browser_state(self, include_screenshot: bool = False) -> str:
+        """The upstream state, plus where on the page it was taken.
+
+        Upstream `browser_use` 0.11.9 returns url, title, tabs and the
+        interactive elements, and nothing about the document those elements were
+        read from. That makes an absence unfalsifiable: the elements it lists
+        are the ones the DOM serializer reached, a reader cannot tell a short
+        page from the top of a long one, and the tool's own description says
+        `all interactive elements`. Measured across two production runs on
+        2026-08-27, nine `browser_get_state` observations carried no scroll
+        position and no document height, and both runs concluded that a
+        component was not on a page they had only seen the top of.
+
+        `BrowserStateSummary` has carried `page_info` the whole time -- 0.11.9
+        simply never serialises it, and 0.11.13 does. This adds it here so the
+        answer does not depend on which of those the image resolved, and so a
+        later upgrade changes nothing about what the agent reads.
+
+        `pages_below` is the number the agent actually acts on. A count of
+        pixels invites arithmetic against a viewport height it has to find
+        elsewhere; "1.8 screens below" is a decision.
+        """
+        import json
+
+        state_json = await super()._get_browser_state(include_screenshot)
+        try:
+            state = json.loads(state_json)
+        except (TypeError, ValueError):
+            # An error string rather than a state document. Upstream returns one
+            # when there is no session, and it is not this method's to rewrite.
+            return state_json
+        if not isinstance(state, dict) or "scroll" in state:
+            return state_json
+
+        session = self.browser_session
+        page_info = getattr(
+            getattr(session, "_cached_browser_state_summary", None), "page_info", None
+        )
+        if page_info is None:
+            return state_json
+
+        viewport_height = getattr(page_info, "viewport_height", 0) or 0
+        page_height = getattr(page_info, "page_height", 0) or 0
+        scroll_y = getattr(page_info, "scroll_y", 0) or 0
+        state["viewport"] = {
+            "width": getattr(page_info, "viewport_width", None),
+            "height": viewport_height,
+        }
+        state["page"] = {
+            "width": getattr(page_info, "page_width", None),
+            "height": page_height,
+        }
+        state["scroll"] = {"x": getattr(page_info, "scroll_x", None), "y": scroll_y}
+        if viewport_height:
+            below = max(page_height - (scroll_y + viewport_height), 0)
+            state["pages_above"] = round(scroll_y / viewport_height, 1)
+            state["pages_below"] = round(below / viewport_height, 1)
+        return json.dumps(state, indent=2)
+
     async def _get_storage(self) -> str:
         """Get browser storage (cookies, local storage, session storage)."""
         import json

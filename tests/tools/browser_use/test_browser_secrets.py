@@ -395,3 +395,89 @@ async def test_browser_server_marks_secret_input_as_sensitive():
     )
     assert dispatched is type_event
     assert result == "Typed <secret> into element 2"
+
+
+class TestBrowserStateSaysWhereOnThePageItWasRead:
+    """`browser_get_state` has to make an absence falsifiable.
+
+    Upstream 0.11.9 returns the interactive elements and nothing about the
+    document they came from, so a reader cannot tell a short page from the top
+    of a long one. Measured across two production runs on 2026-08-27, nine
+    observations carried no scroll position and both runs decided a component
+    was missing from a page they had only seen the top of.
+    """
+
+    @staticmethod
+    def _server_at(scroll_y: int, page_height: int, base: str):
+        import types
+
+        from openhands.tools.browser_use.server import CustomBrowserUseServer
+
+        server = CustomBrowserUseServer.__new__(CustomBrowserUseServer)
+        page_info = types.SimpleNamespace(
+            viewport_width=390,
+            viewport_height=844,
+            page_width=390,
+            page_height=page_height,
+            scroll_x=0,
+            scroll_y=scroll_y,
+        )
+        server.browser_session = types.SimpleNamespace(
+            _cached_browser_state_summary=types.SimpleNamespace(page_info=page_info)
+        )
+
+        async def upstream(self, include_screenshot=False):
+            return base
+
+        CustomBrowserUseServer.__mro__[1]._get_browser_state = upstream
+        return CustomBrowserUseServer, server
+
+    @staticmethod
+    def _page(elements=()):
+        import json
+
+        return json.dumps(
+            {
+                "url": "https://preview.example/artist/3648",
+                "title": "Artist",
+                "tabs": [],
+                "interactive_elements": list(elements),
+            }
+        )
+
+    def test_it_reports_how_many_screens_are_still_below(self):
+        import asyncio
+        import json
+
+        cls, server = self._server_at(844, 4220, self._page([{"index": 1}]))
+
+        state = json.loads(asyncio.run(cls._get_browser_state(server, False)))
+
+        # The number the agent acts on. Pixels would need a viewport height it
+        # has to find somewhere else before they mean anything.
+        assert state["pages_below"] == 3.0
+        assert state["pages_above"] == 1.0
+        assert state["scroll"] == {"x": 0, "y": 844}
+        # Upstream's own content is carried through untouched.
+        assert state["interactive_elements"] == [{"index": 1}]
+
+    def test_a_page_that_fits_reports_nothing_below(self):
+        import asyncio
+        import json
+
+        cls, server = self._server_at(0, 800, self._page())
+
+        state = json.loads(asyncio.run(cls._get_browser_state(server, False)))
+
+        assert state["pages_below"] == 0.0
+
+    def test_an_upstream_error_is_passed_through_unchanged(self):
+        """It is not this method's job to rewrite "no session active"."""
+        import asyncio
+
+        cls, server = self._server_at(0, 800, "Error: No browser session active")
+
+        assert (
+            asyncio.run(cls._get_browser_state(server, False))
+            == "Error: No browser session active"
+        )
