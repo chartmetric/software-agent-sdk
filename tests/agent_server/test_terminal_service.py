@@ -135,9 +135,14 @@ async def test_command_environment_is_not_exposed_on_process_error(
     page = await bash_service.search_bash_events(command_id__eq=command.id)
     output = page.items[-1]
     assert isinstance(output, BashOutput)
-    assert output.stderr == "Error executing command"
+    # The type names the fault; the message is what could carry the secret, and
+    # it is excluded for exactly that reason. `ValueError(secret_value)` is the
+    # shape this guards: an exception raised with the command's own environment
+    # in it, reaching an event that is persisted, searched and shipped onward.
+    assert output.stderr == "Error executing command: ValueError"
     assert secret_value not in caplog.text
     assert secret_value not in page.model_dump_json()
+    assert secret_value not in output.stderr
 
 
 @pytest.mark.asyncio

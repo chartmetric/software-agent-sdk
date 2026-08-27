@@ -359,12 +359,32 @@ class BashEventService:
                 command.id,
                 type(e).__name__,
             )
-            # Create error output event
+            # Create error output event.
+            #
+            # The exception's *type* travels with it; its message deliberately
+            # does not. A caller reading the event rather than this log -- which
+            # in a distributed deployment is every caller, the log being on a
+            # host they cannot reach -- used to receive the bare words "Error
+            # executing command": no type, no cause, exit code -1, and
+            # indistinguishable downstream from the command having failed on its
+            # own terms. Observed in a control plane built on this server, where
+            # a repository clone that died here was reported to the user as "Git
+            # clone failed for <repo>: Error executing command", naming neither
+            # the failure nor anything to do about it.
+            #
+            # The message stays out because it can carry the command's
+            # environment: `start_bash_command` raising `ValueError(secret)`
+            # would put that secret into an event that is persisted, searched
+            # and shipped onward. `test_command_environment_is_not_exposed_on_
+            # process_error` is what pins that, and it is the reason this string
+            # was empty rather than an oversight. A type name is a closed set of
+            # class names and carries no input, so it is safe to add and is the
+            # part that actually names the fault.
             error_output = BashOutput(
                 command_id=command.id,
                 order=0,
                 exit_code=-1,
-                stderr="Error executing command",
+                stderr=f"Error executing command: {type(e).__name__}",
             )
 
             self._save_event_to_file(error_output)
