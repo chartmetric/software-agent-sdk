@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from litellm.exceptions import (
     APIConnectionError,
+    AuthenticationError,
     ContextWindowExceededError,
     RateLimitError,
 )
@@ -619,3 +620,33 @@ async def test_aresponses_fallback_receives_call_context(mock_aresp, mock_resp):
     fb_call_kwargs = mock_resp.call_args_list[-1].kwargs
     assert fb_call_kwargs.get("prompt_cache_key") == "cache-abc"
     assert fb_call_kwargs["extra_headers"]["x-litellm-session-id"] == "sess-xyz"
+
+
+@patch("openhands.sdk.llm.llm.litellm_completion")
+def test_fallback_after_primary_credential_failure(mock_comp):
+    """A credential failure is a reason to switch providers, not to end the run.
+
+    An API key does not rot, but a subscription's access token is short-lived
+    and its refresh token can rotate away; after that every call 401s until a
+    human reconnects. Without this the run dies with a configured fallback
+    sitting unused, and the operator finds out from a dead agent rather than
+    from the log line `try_fallback` writes.
+    """
+    mock_comp.side_effect = [
+        AuthenticationError(
+            message="token expired", llm_provider="openai", model="gpt-5.6-luna"
+        ),
+        _get_mock_response("fallback ok", model="fallback-model"),
+    ]
+
+    fb = _get_llm("fallback-model")
+    strategy = FallbackStrategy(fallback_llms=["fallback-profile"])
+    primary = _get_llm("gpt-5.6-luna", fallback_strategy=strategy)
+    _patch_resolve(primary, [fb])
+
+    resp = primary.completion(_MSGS)
+
+    content = resp.message.content[0]
+    assert isinstance(content, TextContent)
+    assert content.text == "fallback ok"
+    assert mock_comp.call_count == 2

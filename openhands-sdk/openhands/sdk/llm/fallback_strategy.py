@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm.exceptions import (
     APIConnectionError,
+    AuthenticationError,
     InternalServerError,
+    PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     Timeout as LiteLLMTimeout,
@@ -26,6 +28,17 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 # Exceptions that trigger fallback to alternate LLMs (after retries exhausted).
+#
+# Transient failures, plus credential failures. The credential half matters for
+# subscription-backed auth: an API key does not rot, but a subscription's access
+# token is short-lived and its refresh token can rotate away, after which every
+# call 401s until a human reconnects. Ending the run there wastes a configured
+# fallback that would have served the same model through another provider, and
+# the operator learns about it from a dead agent rather than from a log line.
+#
+# Deliberately not the whole 4xx family: a 400 for a malformed request fails
+# identically on the fallback, so retrying it there buys a second bill and no
+# answer.
 _LLM_FALLBACK_EXCEPTIONS: Final[tuple[type[Exception], ...]] = (
     APIConnectionError,
     RateLimitError,
@@ -33,6 +46,8 @@ _LLM_FALLBACK_EXCEPTIONS: Final[tuple[type[Exception], ...]] = (
     LiteLLMTimeout,
     InternalServerError,
     LLMNoResponseError,
+    AuthenticationError,
+    PermissionDeniedError,
 )
 
 
