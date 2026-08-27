@@ -530,8 +530,10 @@ async def screencast_socket(
     - ``{"type": "mouse", "action": "down"|"up"|"move"|"wheel", "x", "y",
       "button"?, "clickCount"?, "deltaX"?, "deltaY"?}`` and
       ``{"type": "key", "action": "down"|"up"|"char", "key", "code",
-      "text"?}`` -- forwarded to the browser via CDP, but only while the
-      sending client holds the control lock; otherwise ignored.
+      "text"?, "keyCode"?}`` -- forwarded to the browser via CDP, but only
+      while the sending client holds the control lock; otherwise ignored.
+      ``keyCode`` is the DOM ``KeyboardEvent.keyCode``; without it Chrome
+      runs no editing command, so Backspace and the arrow keys do nothing.
     - ``{"type": "frame_format", "format": "binary"}`` -- opt in to binary
       frame delivery: each frame arrives as one binary WebSocket message of
       ``[4-byte big-endian metadata length][metadata JSON][raw JPEG bytes]``
@@ -649,6 +651,11 @@ async def _handle_screencast_client_message(
         )
         if cdp_type is None:
             return
+        # Chrome resolves editing commands from the virtual key code, so a
+        # Backspace that arrives without one deletes nothing (see
+        # ScreencastSession.dispatch_key). Clients that predate the field send
+        # no `keyCode` and keep the old behavior rather than being refused.
+        key_code = data.get("keyCode")
         input_pump.enqueue(
             "key",
             {
@@ -656,6 +663,11 @@ async def _handle_screencast_client_message(
                 "key": data.get("key", ""),
                 "code": data.get("code", ""),
                 "text": data.get("text"),
+                "windows_virtual_key_code": (
+                    key_code
+                    if isinstance(key_code, int) and not isinstance(key_code, bool)
+                    else None
+                ),
             },
         )
 

@@ -293,6 +293,75 @@ class TestScreencastInputPump:
         )
 
 
+class TestScreencastKeyMessages:
+    """Chrome runs a keyboard event's editing command off the virtual key
+    code, never off `key`: measured against a real CDP target, a Backspace
+    with no code deletes nothing while the same event carrying 8 deletes the
+    character. The wire protocol therefore has to carry it end to end."""
+
+    @staticmethod
+    async def _enqueued(message: dict) -> list[tuple[str, dict]]:
+        enqueued: list[tuple[str, dict]] = []
+        pump = MagicMock()
+        pump.enqueue = MagicMock(
+            side_effect=lambda kind, payload: enqueued.append((kind, payload))
+        )
+        await sockets_mod._handle_screencast_client_message(
+            MagicMock(spec=ScreencastService),
+            uuid4(),
+            message,
+            MagicMock(),
+            pump,
+        )
+        return enqueued
+
+    @pytest.mark.asyncio
+    async def test_key_code_reaches_the_dispatcher(self):
+        enqueued = await self._enqueued(
+            {
+                "type": "key",
+                "action": "down",
+                "key": "Backspace",
+                "code": "Backspace",
+                "keyCode": 8,
+            }
+        )
+
+        assert len(enqueued) == 1
+        kind, payload = enqueued[0]
+        assert kind == "key"
+        assert payload["type"] == "keyDown"
+        assert payload["windows_virtual_key_code"] == 8
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bogus", [None, "8", 8.5, True])
+    async def test_non_integer_key_code_is_dropped_not_forwarded(self, bogus):
+        """A bad value must not reach CDP as a real key: `True` is an int in
+        Python and would arrive as virtual key 1."""
+        enqueued = await self._enqueued(
+            {
+                "type": "key",
+                "action": "down",
+                "key": "a",
+                "code": "KeyA",
+                "keyCode": bogus,
+            }
+        )
+
+        assert enqueued[0][1]["windows_virtual_key_code"] is None
+
+    @pytest.mark.asyncio
+    async def test_client_that_sends_no_key_code_is_still_forwarded(self):
+        """Rolling out the frontend and the sandbox image is not atomic, so
+        the older client keeps working rather than losing keyboard input."""
+        enqueued = await self._enqueued(
+            {"type": "key", "action": "char", "key": "a", "code": "KeyA", "text": "a"}
+        )
+
+        assert enqueued[0][1]["windows_virtual_key_code"] is None
+        assert enqueued[0][1]["text"] == "a"
+
+
 class TestBinaryFrameDelivery:
     @pytest.mark.asyncio
     async def test_opted_in_viewer_receives_framed_bytes(self):

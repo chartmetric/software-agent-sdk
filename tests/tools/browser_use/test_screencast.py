@@ -342,6 +342,49 @@ class TestScreencastDispatchKey:
         )
 
     @pytest.mark.asyncio
+    async def test_dispatch_key_sends_virtual_key_code_on_both_fields(
+        self, started_session, mock_browser_session
+    ):
+        """Chrome resolves editing commands from the virtual key code, not
+        from `key`: a Backspace dispatched without one fires the page's
+        keydown handlers and deletes nothing, so a human taking over the
+        screencast could type but never correct a typo."""
+        await started_session.dispatch_key(
+            "keyDown",
+            key="Backspace",
+            code="Backspace",
+            text=None,
+            windows_virtual_key_code=8,
+        )
+
+        mock_browser_session.cdp_client.send.Input.dispatchKeyEvent.assert_awaited_once_with(
+            params={
+                "type": "keyDown",
+                "key": "Backspace",
+                "code": "Backspace",
+                "windowsVirtualKeyCode": 8,
+                "nativeVirtualKeyCode": 8,
+            },
+            session_id="test-session-id",
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_key_omits_virtual_key_code_when_none(
+        self, started_session, mock_browser_session
+    ):
+        """A client that predates the field keeps the previous wire shape
+        rather than being sent a zero, which Chrome would read as a real
+        (and wrong) key."""
+        await started_session.dispatch_key(
+            "keyDown", key="a", code="KeyA", text="a", windows_virtual_key_code=None
+        )
+
+        dispatch = mock_browser_session.cdp_client.send.Input.dispatchKeyEvent
+        params = dispatch.await_args.kwargs["params"]
+        assert "windowsVirtualKeyCode" not in params
+        assert "nativeVirtualKeyCode" not in params
+
+    @pytest.mark.asyncio
     async def test_dispatch_key_routes_through_current_session_id(
         self, started_session, mock_browser_session
     ):

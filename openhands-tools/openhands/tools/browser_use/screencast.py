@@ -285,12 +285,23 @@ class ScreencastSession:
         key: str,
         code: str,
         text: str | None,
+        windows_virtual_key_code: int | None = None,
     ) -> None:
         """Dispatch a keyboard event to the current CDP target for human takeover.
 
         `type` must be one of the CDP-native key event types (keyDown, keyUp,
         char); anything else is silently ignored. Never raises -- see
         dispatch_mouse and the module Error Handling Policy.
+
+        `windows_virtual_key_code` is not decoration: Chrome resolves editing
+        commands (delete backward, caret motion, tab) from the virtual key
+        code, never from `key`. Measured against a real CDP target -- a
+        keyDown carrying key="Backspace" with no virtual key code fires the
+        page's own keydown handlers and deletes nothing, while the same event
+        with code 8 deletes the character. So a human taking over the
+        screencast could type but never correct a typo. Optional because a
+        client that cannot supply one still gets today's behavior rather than
+        a refused event, and `char` events insert from `text` alone.
         """
         if not self._is_active or self._browser_session is None:
             return
@@ -302,6 +313,12 @@ class ScreencastSession:
             params: dict[str, Any] = {"type": type, "key": key, "code": code}
             if text is not None:
                 params["text"] = text
+            if windows_virtual_key_code is not None:
+                # Chrome reads the editing command off the Windows code; the
+                # native one keeps the event self-consistent for pages that
+                # inspect it themselves.
+                params["windowsVirtualKeyCode"] = windows_virtual_key_code
+                params["nativeVirtualKeyCode"] = windows_virtual_key_code
             await self._browser_session.cdp_client.send.Input.dispatchKeyEvent(
                 params=cast("DispatchKeyEventParameters", params),
                 session_id=self._current_session_id,
