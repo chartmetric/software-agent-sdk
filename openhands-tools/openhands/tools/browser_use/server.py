@@ -142,6 +142,17 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
                 const wanted = needle.toLowerCase();
                 let best = null;
                 for (const el of document.body.querySelectorAll('*')) {
+                    // `<script>` and `<style>` carry text that is never drawn,
+                    // and a framework's data island is full of the very words a
+                    // caller is looking for: measured 2026-08-27, this matched
+                    // Next.js's `__NEXT_DATA__` blob -- the page's own JSON
+                    // mentions the heading -- and scrolled to the bottom of the
+                    // document instead of to the component.
+                    //
+                    // `getClientRects()` rather than `offsetParent`, which is
+                    // also null for `position: fixed` and would drop a sticky
+                    // header or a modal the caller may be looking for.
+                    if (el.getClientRects().length === 0) continue;
                     const own = el.innerText;
                     if (!own || !own.toLowerCase().includes(wanted)) continue;
                     if (best === null || best.contains(el)) best = el;

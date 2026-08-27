@@ -528,6 +528,30 @@ class TestScrollingToSomethingRatherThanTowardsIt:
         # What the page shows, so a match cannot come from a hidden node.
         assert "innerText" in seen["script"]
 
+    def test_it_ignores_text_the_page_never_draws(self):
+        """A framework's data island holds the very words being looked for.
+
+        Measured in production 2026-08-27 on conversation a735c192, the first
+        run to have this tool: it asked for "Noteworthy Insights" and was
+        scrolled to Next.js's `__NEXT_DATA__` blob, whose JSON mentions the
+        heading, at the bottom of the document. `innerText` on a `<script>`
+        falls back to `textContent`, so the blob matched and -- being last in
+        the wrapper both share -- won the walk.
+        """
+        import asyncio
+
+        cls, server, seen = self._server("Noteworthy Insights")
+
+        asyncio.run(cls._scroll_to_text(server, "Noteworthy"))
+
+        # Run the selector the page is actually given, against a document shaped
+        # like the one that failed: a wrapper holding both the heading and, last,
+        # the data blob. Asserting on the script's text would pass against a
+        # rule that never fires.
+        script = seen["script"]
+        chosen = _pick_in_fake_dom(script, "Noteworthy")
+        assert chosen == "H2#real", chosen
+
     def test_not_finding_it_names_what_to_do_instead(self):
         """The run gets one turn on this text, so it has to carry the remedy."""
         import asyncio
@@ -553,3 +577,53 @@ class TestScrollingToSomethingRatherThanTowardsIt:
 
 async def _coro(value):
     return value
+
+
+def _pick_in_fake_dom(selector_source: str, needle: str) -> str:
+    """Which element the injected selector picks, on the DOM that broke it.
+
+    A tiny stand-in for the page: the wrapper contains the heading and then the
+    `__NEXT_DATA__` script, and `innerText` on a script falls back to its text
+    because it is never rendered -- which is exactly why it matched. Only the
+    rendered node reports client rects.
+    """
+    import re
+
+    uses_client_rects = bool(
+        re.search(r"getClientRects\(\)\.length\s*===\s*0", selector_source)
+    )
+
+    class Node:
+        def __init__(self, name, text, rects, children=()):
+            self.name, self.text, self.rects = name, text, rects
+            self.children = list(children)
+
+        def contains(self, other):
+            return other is not self and any(
+                child is other or child.contains(other) for child in self.children
+            )
+
+        def walk(self):
+            for child in self.children:
+                yield child
+                yield from child.walk()
+
+    heading = Node("H2#real", "Noteworthy Insights", 1)
+    blob = Node("SCRIPT#__NEXT_DATA__", '{"panel":"Noteworthy Insights"}', 0)
+    # The blob first, which is the order that loses: the walk keeps the last
+    # element the current best still contains, so an unrendered node reached
+    # while the best is still their shared wrapper takes it and the heading
+    # after it never can. Verified against a real Chrome DOM on 2026-08-27 --
+    # in this order the unguarded selector returns the script.
+    wrapper = Node("DIV#__next", "Noteworthy Insights", 1, [blob, heading])
+    body = Node("BODY", "Noteworthy Insights", 1, [wrapper])
+
+    best = None
+    for node in body.walk():
+        if uses_client_rects and node.rects == 0:
+            continue
+        if needle.lower() not in node.text.lower():
+            continue
+        if best is None or best.contains(node):
+            best = node
+    return best.name if best else "none"
