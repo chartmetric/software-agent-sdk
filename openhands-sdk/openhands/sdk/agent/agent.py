@@ -1416,10 +1416,40 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
         """
         tool = self.tools_map.get(action_event.tool_name, None)
         if tool is None:
-            raise RuntimeError(
-                f"Tool '{action_event.tool_name}' not found. This should not happen "
-                "as it was checked earlier."
+            # Reachable, despite the check in `_handle_tool_call`: `step()` begins
+            # by executing unmatched actions straight from the conversation
+            # history, so an action recorded by an *earlier* agent -- with a
+            # different tool set -- arrives here having never passed that check.
+            #
+            # Measured on a production conversation (2026-08-27) whose execution
+            # run had died mid-flight: fifteen `terminal`, `task` and
+            # `read_pull_request_reviews` actions were left without observations,
+            # and the next control turn -- which has none of those tools -- spent
+            # itself raising on them instead of answering. The answer came from a
+            # fallback.
+            #
+            # Raising was wrong twice over. It told the model "this should not
+            # happen as it was checked earlier", which names no tool it *can*
+            # call and nothing to do next; and it left the action unmatched, so
+            # the next turn picked it up again. An error event carries the same
+            # remedy `_handle_tool_call` gives -- the tools that do exist -- and
+            # matches the action, which retires it.
+            available = sorted(self.tools_map.keys())
+            err = (
+                f"Error executing tool '{action_event.tool_name}': tool not "
+                f"available to this agent. Available tools: {available}. This "
+                "action was recorded earlier, by an agent with a different tool "
+                "set; do not retry it -- use one of the tools listed above."
             )
+            logger.warning(err)
+            return [
+                AgentErrorEvent(
+                    error=err,
+                    tool_name=action_event.tool_name,
+                    tool_call_id=action_event.tool_call.id,
+                    classification=AGENT_OUTCOME,
+                )
+            ]
 
         # Execute actions!
         try:
