@@ -778,7 +778,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                     action.extract_links, action.start_from_char
                 )
             elif isinstance(action, BrowserScrollAction):
-                result = await self.scroll(action.direction)
+                result = await self.scroll(action.direction, action.to_text)
             elif isinstance(action, BrowserSetViewportAction):
                 result = await self.set_viewport(action.width, action.height)
             elif isinstance(action, BrowserGoBackAction):
@@ -937,9 +937,16 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             await self.click(submit_index)
         return await self.get_state(include_screenshot)
 
-    async def scroll(self, direction: str = "down") -> str:
-        """Scroll the page."""
+    async def scroll(self, direction: str = "down", to_text: str | None = None) -> str:
+        """Scroll the page, by a screen or straight to an element.
+
+        A target wins over a direction: a caller that named what it is looking
+        for has already said which way to go, and asking the page where the
+        thing is costs one call whatever the document's length.
+        """
         await self._ensure_initialized()
+        if to_text:
+            return await self._server._scroll_to_text(to_text)
         return await self._server._scroll(direction)
 
     async def set_viewport(self, width: int, height: int) -> str:

@@ -642,15 +642,34 @@ class BrowserScrollAction(BrowserAction):
         default="down",
         description="Direction to scroll. Options: 'up', 'down'. Default: 'down'",
     )
+    to_text: str | None = Field(
+        default=None,
+        description=(
+            "Text the element shows. Given, the page is asked where that text "
+            "is and scrolled straight to it, and `direction` is ignored."
+        ),
+    )
 
 
-BROWSER_SCROLL_DESCRIPTION = """Scroll the page up or down.
+BROWSER_SCROLL_DESCRIPTION = """Scroll the page, by a screen or straight to something.
 
-Use this tool to scroll through page content when elements are not visible or when you need
-to see more content.
+Pass `to_text` with words the element shows and the page scrolls directly to it,
+centred: one call, however far down it is and however much of the page has
+loaded. Prefer it whenever you know what you are looking for. `direction` moves
+500 pixels a call, so reaching something far down costs a round trip per screen,
+and on a page that grows as it loads the new content can arrive faster than that
+clears it.
+
+Use `direction` to survey a page you have no target on yet; `pages_below` from
+browser_get_state says how much is left.
+
+Not finding the text is an answer worth reading rather than a reason to keep
+scrolling: it may not have loaded, it may be behind a tab or an expander that
+has to be opened first, or this may not be the page that renders it.
 
 Parameters:
-- direction: Direction to scroll - "up" or "down" (optional, default: "down")
+- to_text: Text of the element to scroll to (optional)
+- direction: "up" or "down", used when no `to_text` is given (optional, default: "down")
 
 Returns the resulting page state, so a following browser_get_state call is
 redundant: read the state in this tool's own result.

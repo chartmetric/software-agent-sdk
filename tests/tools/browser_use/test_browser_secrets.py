@@ -481,3 +481,75 @@ class TestBrowserStateSaysWhereOnThePageItWasRead:
             asyncio.run(cls._get_browser_state(server, False))
             == "Error: No browser session active"
         )
+
+
+class TestScrollingToSomethingRatherThanTowardsIt:
+    """A target has to cost one call, not one call per screen.
+
+    `browser_scroll` moved 500 pixels and took only a direction. Measured on
+    conversation 6aa229b4 (2026-08-27): the run scrolled to y=2500 on an
+    authenticated page, watched `pages_below` rise from 4.0 to 9.7 while it did
+    -- the page grows as it loads -- wrote "I haven't reached the panel yet",
+    and opened a pull request against a component it never saw. The edit was a
+    guess read off the source.
+    """
+
+    @staticmethod
+    def _server(evaluate_result):
+        import types
+
+        from openhands.tools.browser_use.server import CustomBrowserUseServer
+
+        seen: dict = {}
+
+        class Page:
+            async def evaluate(self, script, arg):
+                seen["script"], seen["arg"] = script, arg
+                return evaluate_result
+
+        server = CustomBrowserUseServer.__new__(CustomBrowserUseServer)
+        server.browser_session = types.SimpleNamespace(
+            get_current_page=lambda: _coro(Page())
+        )
+        return CustomBrowserUseServer, server, seen
+
+    def test_the_target_is_reached_in_one_call_and_centred(self):
+        import asyncio
+
+        cls, server, seen = self._server("Noteworthy Insights")
+
+        result = asyncio.run(cls._scroll_to_text(server, "Noteworthy"))
+
+        assert "Noteworthy Insights" in result
+        assert seen["arg"] == "Noteworthy"
+        # Centred, not merely brought to an edge, where a sticky header covers
+        # it and the capture shows the wrong thing.
+        assert "block: 'center'" in seen["script"]
+        # What the page shows, so a match cannot come from a hidden node.
+        assert "innerText" in seen["script"]
+
+    def test_not_finding_it_names_what_to_do_instead(self):
+        """The run gets one turn on this text, so it has to carry the remedy."""
+        import asyncio
+
+        cls, server, _ = self._server(None)
+
+        result = asyncio.run(cls._scroll_to_text(server, "Nowhere"))
+
+        for remedy in ("loaded", "tab", "browser_get_content"):
+            assert remedy in result
+
+    def test_a_target_wins_over_a_direction(self):
+        """Naming what you are looking for already says which way to go."""
+        from openhands.tools.browser_use.definition import BrowserScrollAction
+
+        assert "to_text" in BrowserScrollAction.model_fields
+        # `browser_sequence` reuses the same schema, so a sequenced scroll can
+        # take a target too rather than only the standalone tool.
+        from openhands.tools.browser_use.definition import _sequence_step_actions
+
+        assert "to_text" in _sequence_step_actions()["scroll"].model_fields
+
+
+async def _coro(value):
+    return value

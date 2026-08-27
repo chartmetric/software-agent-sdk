@@ -104,6 +104,63 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
         """
         self._inject_scripts = scripts
 
+    async def _scroll_to_text(self, text: str) -> str:
+        """Put the first element whose text contains ``text`` in view.
+
+        `browser_scroll` moves 500 pixels a call and takes only a direction, so
+        reaching anything far down a page costs a round trip per screen -- and
+        on a page that grows as it loads, the screens arrive faster than the
+        scrolling clears them. Measured on conversation 6aa229b4 (2026-08-27):
+        the agent scrolled to y=2500, watched `pages_below` go from 4.0 to 9.7
+        while it did, wrote "I haven't reached the panel yet", and opened a pull
+        request against a component it never saw. Its edit was a guess read off
+        the source.
+
+        So the page is asked where the thing is instead. One call, no dependence
+        on how long the document is or how much of it has loaded, and the
+        element is centred rather than left at the edge where a sticky header
+        covers it.
+
+        Text, not a CSS selector: what a run has is the words from the request
+        or the screenshot it was given. A selector would make the caller derive
+        one from source it may have read wrongly, which is the same guess in
+        another form.
+        """
+        if not self.browser_session:
+            return "Error: No browser session active"
+
+        page = await self.browser_session.get_current_page()
+        if page is None:
+            return "Error: No page is open to scroll"
+
+        # `innerText` rather than `textContent`: it is what the page shows, so a
+        # match cannot come from a hidden node the reader will never see. The
+        # deepest match wins -- an ancestor contains the text too, and centring
+        # `<body>` scrolls nowhere.
+        found = await page.evaluate(
+            """(needle) => {
+                const wanted = needle.toLowerCase();
+                let best = null;
+                for (const el of document.body.querySelectorAll('*')) {
+                    const own = el.innerText;
+                    if (!own || !own.toLowerCase().includes(wanted)) continue;
+                    if (best === null || best.contains(el)) best = el;
+                }
+                if (!best) return null;
+                best.scrollIntoView({block: 'center', inline: 'nearest'});
+                return best.innerText.trim().slice(0, 120);
+            }""",
+            text,
+        )
+        if not found:
+            return (
+                f"No element on the page shows {text!r}. It may not have loaded "
+                "yet, it may be behind a tab or an expander that has to be "
+                "opened first, or this may not be the page that renders it -- "
+                "read browser_get_content to see what this page does show."
+            )
+        return f"Scrolled to {found!r}"
+
     async def _set_viewport(self, width: int, height: int) -> str:
         """Render the page already open at another width.
 
