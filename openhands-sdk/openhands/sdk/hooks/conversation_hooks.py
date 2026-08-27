@@ -113,7 +113,7 @@ class HookEventProcessor:
 
         # Run PostToolUse hooks for observation events
         if isinstance(event, ObservationEvent):
-            self._handle_post_tool_use(event)
+            callback_event = self._handle_post_tool_use(event)
 
         # Run UserPromptSubmit hooks for user messages
         if isinstance(event, MessageEvent) and event.source == "user":
@@ -175,10 +175,30 @@ class HookEventProcessor:
                     "after creating the Conversation."
                 )
 
-    def _handle_post_tool_use(self, event: ObservationEvent) -> None:
-        """Handle PostToolUse hooks after an action completes."""
+    def _handle_post_tool_use(self, event: ObservationEvent) -> ObservationEvent:
+        """Handle PostToolUse hooks after an action completes.
+
+        Returns the (possibly extended) event. A hook's ``additionalContext`` is
+        appended to ``extended_content``, which is where an observation carries
+        text the agent reads alongside the tool's own output.
+
+        Before this, PostToolUse was the one event whose hooks ran, produced
+        ``additional_context``, and had it dropped on the floor: the results
+        reached ``HookExecutionEvent`` for observability and nothing else. That
+        left the hook able to *watch* a tool result and unable to *say anything
+        about it*, so every judgement about a tool result had to wait for the
+        Stop hook -- by which point the run has already spent itself acting on
+        it. ``UserPromptSubmit`` has injected its context this way from the
+        start; this is that same path for the other end of the loop.
+
+        The event's identity is preserved through ``model_copy``. An observation
+        is referenced by its id elsewhere (its action, the visual-evidence
+        record, the persisted event log), so this must extend the event the run
+        already has rather than substitute a new one -- unlike the message path
+        above, whose replacement is a genuinely new turn.
+        """
         if not self.hook_manager.has_hooks(HookEventType.POST_TOOL_USE):
-            return
+            return event
 
         # O(1) lookup of corresponding action from state events
         action_event = None
@@ -192,7 +212,7 @@ class HookEventProcessor:
                 pass  # action not found
 
         if action_event is None:
-            return
+            return event
 
         tool_name = event.tool_name
         tool_input: dict[str, Any] = {}
@@ -239,6 +259,24 @@ class HookEventProcessor:
             )
             if result.error:
                 logger.warning(f"PostToolUse hook error: {result.error}")
+
+        additional_context = "\n".join(
+            result.additional_context for result in results if result.additional_context
+        )
+        if not additional_context:
+            return event
+        logger.debug(
+            f"PostToolUse hook extending {tool_name} observation: "
+            f"{additional_context[:100]}..."
+        )
+        return event.model_copy(
+            update={
+                "extended_content": [
+                    *event.extended_content,
+                    TextContent(text=additional_context),
+                ]
+            }
+        )
 
     def _handle_user_prompt_submit(self, event: MessageEvent) -> MessageEvent:
         """Handle UserPromptSubmit hooks before processing a user message.

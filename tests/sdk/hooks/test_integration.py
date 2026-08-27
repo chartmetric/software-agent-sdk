@@ -3,7 +3,12 @@
 import pytest
 
 from openhands.sdk.conversation.state import ConversationState
-from openhands.sdk.event import ActionEvent, HookExecutionEvent, MessageEvent
+from openhands.sdk.event import (
+    ActionEvent,
+    HookExecutionEvent,
+    MessageEvent,
+    ObservationEvent,
+)
 from openhands.sdk.hooks.config import HookConfig
 from openhands.sdk.hooks.conversation_hooks import (
     HookEventProcessor,
@@ -468,6 +473,125 @@ class TestPostToolUseActionLookup:
 
         # Hook should NOT have been called (action not found)
         assert not log_file.exists()
+
+
+class TestPostToolUseAdditionalContext:
+    """A PostToolUse hook can say something about the result it just watched.
+
+    The hook already ran and already produced ``additional_context``; until this
+    was wired up the value was discarded, so a hook could observe a tool result
+    and had no way to tell the agent anything about it.
+    """
+
+    @pytest.fixture
+    def mock_conversation_state(self, tmp_path):
+        import uuid
+
+        from pydantic import SecretStr
+
+        from openhands.sdk.agent import Agent
+        from openhands.sdk.llm import LLM
+        from openhands.sdk.workspace import LocalWorkspace
+
+        return ConversationState.create(
+            id=uuid.uuid4(),
+            agent=Agent(
+                llm=LLM(model="test-model", api_key=SecretStr("test-key")), tools=[]
+            ),
+            workspace=LocalWorkspace(working_dir=str(tmp_path)),
+            persistence_dir=None,
+        )
+
+    @staticmethod
+    def _context_hook_config(context: str) -> HookConfig:
+        script = f"import json; print(json.dumps({{'additionalContext': {context!r}}}))"
+        return HookConfig.from_dict(
+            {
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                {"type": "command", "command": python_command(script)}
+                            ],
+                        }
+                    ]
+                }
+            }
+        )
+
+    @staticmethod
+    def _observation_with_action(state):
+        from openhands.sdk.llm import MessageToolCall
+        from openhands.sdk.tool.builtins import ThinkAction, ThinkObservation
+
+        action_event = ActionEvent(
+            source="agent",
+            tool_name="Think",
+            tool_call_id="test-call-id",
+            tool_call=MessageToolCall(
+                id="test-call-id", name="Think", arguments="{}", origin="completion"
+            ),
+            llm_response_id="test-response-id",
+            action=ThinkAction(thought="test thought"),
+            thought=[],
+        )
+        state.events.append(action_event)
+        return ObservationEvent(
+            source="agent",
+            action_id=action_event.id,
+            tool_name="Think",
+            tool_call_id="test-call-id",
+            observation=ThinkObservation(),
+        )
+
+    def test_additional_context_reaches_the_agent(
+        self, tmp_path, mock_conversation_state
+    ):
+        """The context lands in the tool result the model actually reads."""
+        note = "the browser carried no session"
+        delivered: list = []
+        processor = HookEventProcessor(
+            hook_manager=HookManager(
+                config=self._context_hook_config(note),
+                working_dir=str(tmp_path),
+            ),
+            original_callback=delivered.append,
+        )
+        processor.set_conversation_state(mock_conversation_state)
+        observation = self._observation_with_action(mock_conversation_state)
+
+        processor.on_event(observation)
+
+        # The callback also carries this hook's own HookExecutionEvent.
+        (observed,) = [e for e in delivered if isinstance(e, ObservationEvent)]
+        # The message the LLM is handed, not the field it came from: a note the
+        # model never sees is the failure this whole path exists to remove.
+        assert note in str(observed.to_llm_message())
+        # Same event, extended. Its id is what links it to its action and to the
+        # visual-evidence record, so a substitute would break both.
+        assert observed.id == observation.id
+
+    def test_silent_hook_leaves_the_observation_alone(
+        self, tmp_path, mock_conversation_state
+    ):
+        """A hook with nothing to say must not rewrite the observation."""
+        delivered: list = []
+        processor = HookEventProcessor(
+            hook_manager=HookManager(
+                config=self._context_hook_config(""),
+                working_dir=str(tmp_path),
+            ),
+            original_callback=delivered.append,
+        )
+        processor.set_conversation_state(mock_conversation_state)
+        observation = self._observation_with_action(mock_conversation_state)
+
+        processor.on_event(observation)
+
+        (observed,) = [e for e in delivered if isinstance(e, ObservationEvent)]
+        assert observed is observation
+        assert observed.extended_content == []
 
 
 class TestCreateHookCallback:
