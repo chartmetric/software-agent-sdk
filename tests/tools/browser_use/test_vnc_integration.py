@@ -1,7 +1,7 @@
 """Tests for VNC integration with browser tool executor."""
 
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -54,6 +54,34 @@ class TestVNCIntegration:
             executor = BrowserToolExecutor(headless=True)
 
         assert executor._config["window_size"] == {"width": 1440, "height": 900}
+
+    def test_screencast_is_capped_at_the_window_it_streams(self):
+        """The live stream is not re-rendered smaller than the browser window.
+
+        CDP scales every frame down to fit maxWidth/maxHeight, so a fixed cap
+        below the window shrinks the whole page instead of bounding the frame.
+        """
+        with patch.dict(
+            os.environ,
+            {"OH_ENABLE_VNC": "true", "VNC_GEOMETRY": "1920x1080"},
+            clear=False,
+        ):
+            executor = BrowserToolExecutor(headless=True)
+
+        started: dict[str, object] = {}
+
+        async def _capture(on_frame, **kwargs):
+            started.update(kwargs)
+            return True
+
+        with (
+            patch.object(executor, "_ensure_initialized", new=AsyncMock()),
+            patch.object(executor._server, "_start_screencast", new=_capture),
+        ):
+            assert executor.start_screencast(lambda data, metadata: None) is True
+
+        assert started["max_width"] == 1920
+        assert started["max_height"] == 1080
 
     @pytest.mark.parametrize(
         "env_value", ["true", "True", "TRUE", "1", "yes", "Yes", "YES"]

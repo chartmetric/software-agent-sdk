@@ -1068,6 +1068,16 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
 
         async def _do_start() -> bool:
             await self._ensure_initialized()
+            # CDP's maxWidth/maxHeight scale every frame down to fit, so a cap
+            # below the window silently re-renders the stream at the smaller
+            # size: a 1920x1080 desktop arrived as a 1280-wide image, which is
+            # the whole page shrunk rather than the frame the browser drew.
+            # Match the cap to the window the browser actually has, and the
+            # stream is 1:1 whatever geometry the deployment chose.
+            window_size = self._config.get("window_size")
+            if window_size:
+                kwargs.setdefault("max_width", window_size["width"])
+                kwargs.setdefault("max_height", window_size["height"])
             return await self._server._start_screencast(on_frame, **kwargs)
 
         return self._async_executor.run_async(_do_start)
