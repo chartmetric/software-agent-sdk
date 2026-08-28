@@ -292,6 +292,26 @@ class ToolDefinition[ActionT, ObservationT](DiscriminatedUnionMixin, ABC):
     def _ser_observation_type(self, t: type[Observation] | None) -> str | None:
         return None if t is None else kind_of(t)
 
+    @computed_field
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """The JSON Schema for this tool's input, as the model receives it.
+
+        ``action_type`` serializes to a bare kind string, so without this a
+        serialized tool describes what it is for and never what it accepts:
+        the schema lives only in the process that built the tool. Every reader
+        on the far side of the wire -- an event stream, a stored trajectory, a
+        UI listing the agent's tools -- was left with prose alone.
+
+        Delegating to ``_get_tool_schema`` rather than to
+        ``action_type.to_mcp_schema()`` is what keeps the published schema
+        honest for the subclasses that override it: ``ClientTool`` preserves
+        the caller's original constraints, and ``MCPTool`` builds one from a
+        dynamic action type. Both then publish exactly the schema they hand
+        the LLM.
+        """
+        return self._get_tool_schema()
+
     @field_validator("action_type", mode="before")
     @classmethod
     def _val_action_type(cls, v):

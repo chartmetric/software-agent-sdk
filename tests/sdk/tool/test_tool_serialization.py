@@ -154,3 +154,34 @@ def test_tool_kind_field_json() -> None:
     # Should preserve kind field
     assert hasattr(deserialized_tool, "kind")
     assert deserialized_tool.kind == tool.kind
+
+
+def test_serialized_tool_carries_its_input_schema() -> None:
+    """A serialized tool must describe what it accepts, not only what it is for.
+
+    `action_type` serializes to a bare kind string, so without the `parameters`
+    computed field every reader on the far side of the wire -- an event stream,
+    a stored trajectory, a UI listing the agent's tools -- got the tool's prose
+    and no schema at all.
+    """
+    # Arrange
+    tool = ThinkTool.create()[0]
+
+    # Act
+    payload = json.loads(tool.model_dump_json())
+
+    # Assert
+    assert payload["parameters"] == tool.to_openai_tool()["function"]["parameters"]
+    assert "thought" in payload["parameters"]["properties"]
+
+
+def test_input_schema_survives_a_round_trip() -> None:
+    """The added field must not break polymorphic deserialization."""
+    # Arrange
+    tool = FinishTool.create()[0]
+
+    # Act
+    restored = ToolDefinition.model_validate_json(tool.model_dump_json())
+
+    # Assert
+    assert restored.parameters == tool.parameters
