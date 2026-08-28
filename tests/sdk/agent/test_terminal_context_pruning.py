@@ -8,6 +8,13 @@ from openhands.sdk.agent.terminal_context_pruning import (
 from openhands.sdk.llm import Message, TextContent
 
 
+def _text_of(message: Message) -> str:
+    """The message's single text block, narrowed for the type checker."""
+    block = message.content[0]
+    assert isinstance(block, TextContent)
+    return block.text
+
+
 def _terminal(text: str) -> Message:
     return Message(role="tool", name="terminal", content=[TextContent(text=text)])
 
@@ -21,7 +28,7 @@ def test_recent_output_is_left_byte_identical() -> None:
 
     pruned = prune_stale_terminal_observations(messages)
 
-    assert [m.content[0].text for m in pruned] == [m.content[0].text for m in messages]
+    assert [_text_of(m) for m in pruned] == [_text_of(m) for m in messages]
 
 
 def test_a_superseded_output_keeps_its_tail_not_just_its_head() -> None:
@@ -36,8 +43,8 @@ def test_a_superseded_output_keeps_its_tail_not_just_its_head() -> None:
 
     pruned = prune_stale_terminal_observations(messages)
 
-    stale = pruned[0].content[0].text
-    assert len(stale) < len(messages[0].content[0].text)
+    stale = _text_of(pruned[0])
+    assert len(stale) < len(_text_of(messages[0]))
     assert "$ pytest" in stale, "the command echo survives"
     assert "old-FAILED" in stale, "the failure at the end survives"
     assert "omitted" in stale
@@ -57,4 +64,4 @@ def test_other_tools_are_not_touched() -> None:
 
     pruned = prune_stale_terminal_observations(messages)
 
-    assert pruned[0].content[0].text == search.content[0].text
+    assert _text_of(pruned[0]) == _text_of(search)
