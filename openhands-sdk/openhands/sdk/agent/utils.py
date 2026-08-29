@@ -24,9 +24,6 @@ from typing import (
 from openhands.sdk.agent.browser_context_pruning import (
     prune_stale_browser_observations,
 )
-from openhands.sdk.agent.terminal_context_pruning import (
-    prune_stale_terminal_observations,
-)
 from openhands.sdk.context.condenser.base import CondenserBase
 from openhands.sdk.context.view import View
 from openhands.sdk.conversation.types import ConversationTokenCallbackType
@@ -602,9 +599,6 @@ def prepare_llm_messages(
     # Superseded browser snapshots dominate context growth; rewrite the stale
     # ones (never the most recent) before sending. See browser_context_pruning.
     messages = prune_stale_browser_observations(messages)
-    # Terminal output is the largest thing left after that, and nothing
-    # bounded it. See terminal_context_pruning for why its rule differs.
-    messages = prune_stale_terminal_observations(messages)
 
     # Add any additional messages (e.g., user question for ask_agent)
     if additional_messages:
