@@ -14,6 +14,11 @@ from openhands.sdk.llm import LLM
 from openhands.sdk.tool import ToolDefinition
 from openhands.sdk.workspace import LocalWorkspace
 from openhands.tools.browser_use import BrowserToolSet
+from openhands.tools.browser_use.definition import (
+    BrowserFillFormAction,
+    BrowserFormField,
+    BrowserGetStateAction,
+)
 from openhands.tools.browser_use.impl import BrowserToolExecutor
 
 
@@ -480,3 +485,37 @@ def test_browser_toolset_inheritance():
         for tool in tools:
             assert not isinstance(tool, BrowserToolSet)
             assert isinstance(tool, ToolDefinition)
+
+
+def test_reading_the_page_photographs_it_unless_told_otherwise():
+    """A bare state read carries the picture.
+
+    The model does not set this field: measured over a week of production
+    traffic, 1104 `browser_get_state` calls passed it zero times. The default is
+    therefore the whole of the behaviour, and with it off half the runs that
+    owed visual evidence produced none -- each having opened the browser, read
+    the page as text, and moved on with nothing to publish.
+    """
+    assert BrowserGetStateAction().include_screenshot is True
+
+
+def test_filling_a_form_still_does_not_photograph_it():
+    """The form batch keeps the opposite default, and for a different reason.
+
+    It can return while credential fields are still on screen, so its picture is
+    opt-in. Flipping the read tool must not drag this one with it.
+    """
+    action = BrowserFillFormAction(fields=[BrowserFormField(index=0, text="hello")])
+
+    assert action.include_screenshot is False
+
+
+def test_the_model_is_told_the_picture_is_the_default():
+    """The schema the model sees carries the default, not just the Python class.
+
+    A default the tool schema does not advertise is one the model cannot rely
+    on, and this field is only ever exercised through that schema.
+    """
+    schema = BrowserGetStateAction.model_json_schema()
+
+    assert schema["properties"]["include_screenshot"]["default"] is True
