@@ -533,9 +533,20 @@ class BrowserGetSecretTool(
 class BrowserGetStateAction(BrowserAction):
     """Schema for getting browser state."""
 
+    # True, because the model does not set this field. Measured over one week of
+    # production traffic: 1104 browser_get_state calls, the flag passed on none
+    # of them. The default was therefore the only thing deciding whether a run
+    # ever looked at a page, and with it off, 49% of the runs that owed visual
+    # evidence produced none -- each of them having opened the browser, read the
+    # page as text, and moved on. Asking in prose does not reach it either:
+    # three call sites spent that same week telling the agent to "retake with
+    # include_screenshot=True" and moved none of the 1104.
+    #
+    # BrowserFillFormAction keeps its own default at False on purpose; a form
+    # batch can still have credential fields on screen when it returns.
     include_screenshot: bool = Field(
-        default=False,
-        description="Whether to include a screenshot of the current page. Default: False",  # noqa: E501
+        default=True,
+        description="Whether to include a screenshot of the current page. Default: True",  # noqa: E501
     )
 
 
@@ -553,9 +564,21 @@ ways an absence gets called wrongly:
 - Only what is reachable at the current scroll position. `pages_below` says how
   many more screens are under you; scroll and read again before concluding that
   something is not on the page.
+- Only what has been rendered. A section behind a deferred renderer is an empty
+  placeholder until it has been scrolled into view, and its heading is inside it,
+  so nothing on the page names it yet. Searching for its text can therefore never
+  find it, however many times you scroll: the text appears only after you have
+  already arrived. Go to such a section by the id or anchor on its container,
+  which is present from the first paint, or walk the page a screen at a time to
+  the bottom so each one mounts as you pass it. This is why a section can be
+  reported as missing on a narrow window and be perfectly present on a wide one —
+  a taller layout pushes it below everything a text search ever reaches.
 
 Parameters:
-- include_screenshot: Whether to include a screenshot (optional, default: False)
+- include_screenshot: Whether to include a screenshot (optional, default: True).
+  Pass false only for a read whose answer is entirely in the text and that you
+  will not report on. Spacing, clipping, overlap and alignment exist only in the
+  picture, and a state read without one leaves nothing to publish afterwards.
 """  # noqa: E501
 
 
