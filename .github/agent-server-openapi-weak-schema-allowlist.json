@@ -90,9 +90,27 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/BrowserClickTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/BrowserCloseTabTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserCloseTabTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserFillFormTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -102,9 +120,27 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/BrowserGetContentTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserGetSecretTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/BrowserGetStateTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserGetStateTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -114,9 +150,21 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/BrowserGetStorageTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/BrowserGoBackTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserGoBackTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -126,9 +174,21 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/BrowserListTabsTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/BrowserNavigateTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserNavigateTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -138,9 +198,15 @@
     "owner": "OpenHands OSS"
   },
   {
-    "pointer": "/components/schemas/BrowserSetViewportTool/properties/meta/anyOf/0/additionalProperties",
+    "pointer": "/components/schemas/BrowserScrollTool/properties/parameters/additionalProperties",
     "kind": "unrestricted-additional-properties",
-    "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserSequenceTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -156,9 +222,39 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/BrowserSetStorageTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserSetViewportTool/properties/meta/anyOf/0/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserSetViewportTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/BrowserStartRecordingTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserStartRecordingTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserStartVideoRecordingTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -168,9 +264,27 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/BrowserStopRecordingTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserStopVideoRecordingTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/BrowserSwitchTabTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserSwitchTabTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -180,9 +294,21 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/BrowserToolSet/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/BrowserTypeTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserTypeTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -195,6 +321,12 @@
     "pointer": "/components/schemas/ClientTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/ClientTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -234,9 +366,21 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/EditTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/FileEditorTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/FileEditorTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -246,15 +390,33 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/FinishTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/GlobTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/GlobTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/GrepTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/GrepTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -276,6 +438,12 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/InvokeSkillTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/LLM-Input/properties/litellm_extra_body/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Provider-specific configuration is intentionally extensible.",
@@ -291,6 +459,12 @@
     "pointer": "/components/schemas/ListDirectoryTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/ListDirectoryTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -366,15 +540,33 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/MCPToolDefinition/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/MeasureTimingTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/MeasureTimingTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/PlanningFileEditorTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/PlanningFileEditorTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -387,6 +579,12 @@
     "pointer": "/components/schemas/ReadFileTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/ReadFileTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -450,9 +648,21 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/SwitchLLMTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/TaskTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/TaskTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -462,9 +672,21 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/TaskToolSet/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/TaskTrackerTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/TaskTrackerTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -474,9 +696,21 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/TerminalTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/ThinkTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/ThinkTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -498,9 +732,21 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/VisionInspectTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/WorkflowTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/WorkflowTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
@@ -510,9 +756,21 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/WorkflowToolSet/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/WriteFileTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/WriteFileTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
     "owner": "OpenHands OSS"
   },
   {
