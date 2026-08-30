@@ -171,7 +171,10 @@ def test_serialized_tool_carries_its_input_schema() -> None:
     payload = json.loads(tool.model_dump_json())
 
     # Assert
-    assert payload["parameters"] == tool.to_openai_tool()["function"]["parameters"]
+    # `.get`: `parameters` is NotRequired on the LiteLLM TypedDict, so pyright
+    # refuses a direct subscript even though the SDK always populates it.
+    openai_function = tool.to_openai_tool()["function"]
+    assert payload["parameters"] == openai_function.get("parameters")
     assert "thought" in payload["parameters"]["properties"]
 
 
