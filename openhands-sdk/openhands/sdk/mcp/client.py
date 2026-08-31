@@ -9,6 +9,7 @@ from fastmcp import Client as AsyncMCPClient
 
 from openhands.sdk.logger import get_logger
 from openhands.sdk.mcp.exceptions import MCPError
+from openhands.sdk.mcp.stream_timeout import apply_stream_read_timeout
 from openhands.sdk.utils.async_executor import AsyncExecutor
 
 
@@ -62,6 +63,16 @@ class MCPClient(AsyncMCPClient):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Before anything can be called on it: the transport builds its httpx
+        # client on the first connect, so a factory installed later would leave
+        # the first session -- the one that lists the tools -- reading with the
+        # 300 second default. See `stream_timeout` for what that default cost.
+        installed = apply_stream_read_timeout(self.transport)
+        if installed:
+            logger.debug(
+                "Installed the MCP stream read timeout on %d transport(s)",
+                installed,
+            )
         self._executor = AsyncExecutor()
         self._closed = False
         self._tools = []
