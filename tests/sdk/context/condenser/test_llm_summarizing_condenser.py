@@ -110,8 +110,10 @@ def test_default_values(mock_llm: LLM) -> None:
     """
     condenser = LLMSummarizingCondenser(llm=mock_llm)
 
-    # Default max_size should be 240 (raised from 120 to allow more room for tool loops)
-    assert condenser.max_size == 240
+    # Raised to 960 once a token budget derived from the model's own window
+    # took over as the trigger that actually fires; this is now a backstop for
+    # a conversation of very many very small events.
+    assert condenser.max_size == 960
 
     # Default keep_first should be 2 (reduced from 4 to leave more room for
     # condensation)
@@ -277,6 +279,10 @@ def test_condense_with_agent_llm(mock_llm: LLM) -> None:
     # Create a separate mock for the agent's LLM
     agent_llm = MagicMock(spec=LLM)
     agent_llm.model = "gpt-4"
+    # An unknown window leaves max_size as the only trigger, which is what this
+    # test is about; a MagicMock would otherwise stand in for the token count.
+    agent_llm.effective_max_input_tokens = None
+    agent_llm.effective_max_output_tokens = None
 
     # Prepare a view that triggers condensation
     events: list[Event] = [message_event(f"Event {i}") for i in range(12)]

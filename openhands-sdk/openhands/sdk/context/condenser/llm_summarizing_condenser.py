@@ -35,6 +35,33 @@ class Reason(Enum):
     EVENTS = "events"
 
 
+# Share of the room left for input, after the model's own output allowance, that
+# a conversation may fill before it is folded. Folding is the expensive side of
+# this trade -- it spends a summarising call, invalidates the prompt cache from
+# the summary onward, and discards the detail it replaced -- so it is worth
+# deferring until the window is genuinely the constraint. A fifth of the window
+# is kept back so the fold itself, and the turn that follows it, still fit.
+CONTEXT_WINDOW_FOLD_FRACTION = 0.8
+
+
+def _window_fold_budget(agent_llm: LLM | None) -> int | None:
+    """Tokens a conversation may reach before the window forces a fold.
+
+    ``None`` when the window is unknown, which leaves ``max_size`` as the only
+    trigger -- the behaviour before a budget could be derived at all.
+    """
+    if agent_llm is None:
+        return None
+    window = agent_llm.effective_max_input_tokens
+    if not window:
+        return None
+    reserved = agent_llm.effective_max_output_tokens or 0
+    usable = window - reserved
+    if usable <= 0:
+        return None
+    return int(usable * CONTEXT_WINDOW_FOLD_FRACTION)
+
+
 class LLMSummarizingCondenser(RollingCondenser):
     """LLM-based condenser that summarizes forgotten events.
 
@@ -45,8 +72,26 @@ class LLMSummarizingCondenser(RollingCondenser):
     """
 
     llm: LLM
-    max_size: int = Field(default=240, gt=0)
+    max_size: int = Field(default=960, gt=0)
+    """Event count that forces a fold regardless of size.
+
+    A backstop, not the primary trigger. An event count cannot know what a
+    context window holds, and events differ in size by several times, so this
+    number is either too eager or too late for any particular model. The token
+    budget below is the signal that tracks the real constraint; this catches
+    the pathological case of very many very small events.
+
+    Raised from 240 once that budget existed. At 240 it was the trigger that
+    actually fired: measured over production runs at roughly 761 tokens an
+    event, it folded around 183k on a model that accepts 922k, so a fifth of
+    the window forced a summary. What made 240 safe to leave alone before was
+    that nothing else guarded the window; now something does.
+    """
+
     max_tokens: int | None = None
+    """Explicit token budget. When unset, one is derived from the agent LLM's
+    resolved context window -- see `CONTEXT_WINDOW_FOLD_FRACTION`.
+    """
 
     keep_first: int = Field(default=2, ge=0)
     """Minimum number of events to preserve at the start of the view. The first
@@ -112,15 +157,18 @@ class LLMSummarizingCondenser(RollingCondenser):
         if view.unhandled_condensation_request:
             reasons.add(Reason.REQUEST)
 
-        # Reason 2: Token limit is provided and exceeded.
-        if self.max_tokens and agent_llm:
+        # Reason 2: the token budget is exceeded. When none was configured, one
+        # is derived from the model's own window, because that is the constraint
+        # a fold exists to respect.
+        token_budget = self.max_tokens or _window_fold_budget(agent_llm)
+        if token_budget and agent_llm:
             total_tokens = get_total_token_count(view.events, agent_llm)
-            if total_tokens > self.max_tokens:
+            if total_tokens > token_budget:
                 logger.info(
                     "Condenser token limit exceeded: total_tokens=%d max_tokens=%d "
                     "events=%d",
                     total_tokens,
-                    self.max_tokens,
+                    token_budget,
                     len(view),
                 )
                 reasons.add(Reason.TOKENS)
