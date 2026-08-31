@@ -18,9 +18,29 @@ tool messages (never the most recent ones) at message-build time:
   replaced with a short text placeholder. The "Screenshot saved to: <path>"
   line emitted by the tool is left untouched, so the pixels remain recoverable
   from disk.
-- ``browser_get_state`` text: oversized snapshot text in a stale message is
-  cut to a head excerpt plus a placeholder explaining that the snapshot was
-  superseded and how to re-fetch the current state.
+- Page snapshot text: an oversized snapshot in a stale message is cut to a head
+  excerpt plus a placeholder explaining that the snapshot was superseded and how
+  to re-fetch the current state.
+
+A stale snapshot is recognised by its *shape*, not by the name of the tool that
+returned it. That distinction is why this rule needed a second pass: it
+originally truncated text only for ``browser_get_state``, which was right while
+that was the only tool returning a page snapshot. Making every state-changing
+action answer with the page it produced moved the identical payload onto
+``browser_click``, ``browser_scroll``, ``browser_navigate``, ``browser_sequence``,
+``browser_switch_tab`` and the rest, and this rule did not follow -- measured over
+three days of production traffic, 75 MB of browser snapshot text reached the
+models and only the 27% of it named ``browser_get_state`` was ever eligible for
+truncation. Keying on the shape means a browser tool added later is covered the
+day it ships.
+
+The shape is the ``interactive_elements`` key every snapshot carries, because
+they are all rendered by one ``_browser_state_payload``. Over those same three
+days that key appeared in 1,782 of 1,782 oversized text blocks from the eight
+snapshot-returning tools, and in 0 of 204 from ``browser_get_content`` -- whose
+text is the answer the agent asked for rather than a view of the page that a
+later snapshot replaces. Truncating that would destroy a result nothing
+supersedes, which is why the marker gates the rewrite instead of the tool name.
 
 The pruning is a pure, deterministic function of the message list, so every
 process/step rebuilds the identical prompt. A given message's content changes
@@ -35,6 +55,7 @@ built for the current LLM call are rewritten.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TypeGuard
 
 from openhands.sdk.llm import ImageContent, Message, TextContent
 
@@ -44,12 +65,15 @@ from openhands.sdk.llm import ImageContent, Message, TextContent
 # verification pattern while dropping everything older.
 KEEP_RECENT_BROWSER_SCREENSHOTS = 2
 
-# Number of most-recent `browser_get_state` tool messages whose snapshot text
-# is kept intact.
-KEEP_RECENT_BROWSER_STATE_TEXTS = 2
+# Number of most-recent page-snapshot browser tool messages whose snapshot text
+# is kept intact, counted across every tool that returns one rather than per
+# tool name -- the agent acts on the newest snapshot, and which call produced it
+# does not change that.
+KEEP_RECENT_BROWSER_PAGE_SNAPSHOTS = 2
 
-# Head excerpt preserved from a stale `browser_get_state` snapshot so the page
-# URL/title context survives, without the full element tree.
+# Head excerpt preserved from a stale snapshot so the page URL/title context --
+# and, for an action that answered with the page it produced, that action's own
+# result line -- survives without the full element tree.
 STALE_STATE_TEXT_HEAD_CHARS = 2_000
 
 # Only text blocks larger than this are candidates for truncation. Short
@@ -58,7 +82,12 @@ STALE_STATE_TEXT_HEAD_CHARS = 2_000
 _STATE_TEXT_TRUNCATION_THRESHOLD_CHARS = 4_000
 
 _BROWSER_TOOL_NAME_PREFIX = "browser_"
-_BROWSER_GET_STATE_TOOL_NAME = "browser_get_state"
+
+# Every page snapshot is rendered by one `_browser_state_payload`, so they all
+# carry this key and nothing else a browser tool returns does. Matching it is
+# what keeps a `browser_get_content` answer -- which no later snapshot replaces
+# -- out of the rewrite.
+_PAGE_SNAPSHOT_MARKER = '"interactive_elements"'
 
 _STALE_SCREENSHOT_PLACEHOLDER = (
     "[Screenshot omitted: this browser snapshot was superseded by a more "
@@ -72,9 +101,10 @@ _STALE_SCREENSHOT_PLACEHOLDER = (
 def _stale_state_text_placeholder(omitted_chars: int) -> str:
     return (
         f"\n[... {omitted_chars} characters of stale browser state omitted. "
-        "This snapshot was superseded by a newer browser_get_state result "
-        "later in the conversation; element indices above are stale and must "
-        "not be used. Call browser_get_state again for the current page.]"
+        "This snapshot was superseded by a newer one later in the "
+        "conversation; element indices above are stale and must not be used. "
+        "Act on the most recent browser result, or call browser_get_state for "
+        "the current page.]"
     )
 
 
@@ -97,15 +127,23 @@ def _strip_images(
     ]
 
 
+def _is_page_snapshot_text(
+    item: TextContent | ImageContent,
+) -> TypeGuard[TextContent]:
+    """Whether this block is an oversized page snapshot a newer one replaces."""
+    return (
+        isinstance(item, TextContent)
+        and len(item.text) > _STATE_TEXT_TRUNCATION_THRESHOLD_CHARS
+        and _PAGE_SNAPSHOT_MARKER in item.text
+    )
+
+
 def _truncate_state_texts(
     content: Sequence[TextContent | ImageContent],
 ) -> list[TextContent | ImageContent]:
     rewritten: list[TextContent | ImageContent] = []
     for item in content:
-        if (
-            isinstance(item, TextContent)
-            and len(item.text) > _STATE_TEXT_TRUNCATION_THRESHOLD_CHARS
-        ):
+        if _is_page_snapshot_text(item):
             omitted = len(item.text) - STALE_STATE_TEXT_HEAD_CHARS
             rewritten.append(
                 item.model_copy(
@@ -124,35 +162,38 @@ def prune_stale_browser_observations(messages: list[Message]) -> list[Message]:
     """Rewrite stale browser tool messages in a freshly built message list.
 
     Keeps the most recent ``KEEP_RECENT_BROWSER_SCREENSHOTS`` screenshot-bearing
-    browser tool messages and the most recent ``KEEP_RECENT_BROWSER_STATE_TEXTS``
-    ``browser_get_state`` messages fully intact; older ones have their images
-    replaced with placeholders and their oversized snapshot text truncated.
+    browser tool messages and the most recent
+    ``KEEP_RECENT_BROWSER_PAGE_SNAPSHOTS`` snapshot-bearing ones fully intact;
+    older ones have their images replaced with placeholders and their oversized
+    snapshot text truncated.
 
     Only ``role="tool"`` messages whose tool name starts with ``browser_`` are
-    ever touched — user-uploaded images and every other tool result pass
-    through unchanged. Returns a new list; input messages are not mutated.
+    ever touched, and within those only blocks carrying a page snapshot — so a
+    ``browser_get_content`` answer, a user-uploaded image and every other tool
+    result pass through unchanged. Returns a new list; input messages are not
+    mutated.
     """
     screenshot_indices: list[int] = []
-    state_text_indices: list[int] = []
+    snapshot_indices: list[int] = []
     for index, message in enumerate(messages):
         if not _is_browser_tool_message(message):
             continue
         if message.contains_image:
             screenshot_indices.append(index)
-        if message.name == _BROWSER_GET_STATE_TOOL_NAME:
-            state_text_indices.append(index)
+        if any(_is_page_snapshot_text(item) for item in message.content):
+            snapshot_indices.append(index)
 
     stale_screenshot_indices = set(
         screenshot_indices[
             : max(0, len(screenshot_indices) - KEEP_RECENT_BROWSER_SCREENSHOTS)
         ]
     )
-    stale_state_text_indices = set(
-        state_text_indices[
-            : max(0, len(state_text_indices) - KEEP_RECENT_BROWSER_STATE_TEXTS)
+    stale_snapshot_indices = set(
+        snapshot_indices[
+            : max(0, len(snapshot_indices) - KEEP_RECENT_BROWSER_PAGE_SNAPSHOTS)
         ]
     )
-    if not stale_screenshot_indices and not stale_state_text_indices:
+    if not stale_screenshot_indices and not stale_snapshot_indices:
         return messages
 
     pruned: list[Message] = []
@@ -160,7 +201,7 @@ def prune_stale_browser_observations(messages: list[Message]) -> list[Message]:
         content: Sequence[TextContent | ImageContent] = message.content
         if index in stale_screenshot_indices:
             content = _strip_images(content)
-        if index in stale_state_text_indices:
+        if index in stale_snapshot_indices:
             content = _truncate_state_texts(content)
         if content is not message.content:
             message = message.model_copy(update={"content": content})

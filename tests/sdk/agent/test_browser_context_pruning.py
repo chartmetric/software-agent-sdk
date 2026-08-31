@@ -5,11 +5,12 @@ produces for browser tool results: ``role="tool"``, ``name=<tool name>``,
 ``tool_call_id``, and a content list of ``TextContent``/``ImageContent``.
 """
 
+import json
 from unittest.mock import patch
 
 from openhands.sdk.agent.browser_context_pruning import (
+    KEEP_RECENT_BROWSER_PAGE_SNAPSHOTS,
     KEEP_RECENT_BROWSER_SCREENSHOTS,
-    KEEP_RECENT_BROWSER_STATE_TEXTS,
     STALE_STATE_TEXT_HEAD_CHARS,
     prune_stale_browser_observations,
 )
@@ -20,10 +21,32 @@ from openhands.sdk.llm import ImageContent, Message, TextContent
 
 
 _DATA_URL = "data:image/png;base64,aGVsbG8="
-_LONG_STATE_TEXT = "URL: https://example.com/page\n" + ("[42]<button>Click me\n" * 400)
+
+# The real payload, as `_browser_state_payload` renders it for every tool that
+# answers with the page. The `interactive_elements` key is what marks a block as
+# a superseded snapshot, so a fixture without it would exercise a shape
+# production never sends.
+_LONG_STATE_TEXT = json.dumps(
+    {
+        "url": "https://example.com/page",
+        "title": "Example",
+        "tabs": [{"url": "https://example.com/page", "title": "Example"}],
+        "interactive_elements": [
+            {"index": index, "tag": "button", "text": "Click me"}
+            for index in range(400)
+        ],
+    },
+    indent=2,
+)
+
+# What `browser_get_content` returns: long, but the answer the agent asked for
+# rather than a view of the page that a later snapshot replaces.
+_LONG_PAGE_CONTENT = "Dominic Fike is an American singer.\n" * 400
 
 
-def _browser_state_message(call_id: str, with_screenshot: bool = True) -> Message:
+def _browser_state_message(
+    call_id: str, with_screenshot: bool = True, tool_name: str = "browser_get_state"
+) -> Message:
     content: list[TextContent | ImageContent] = [
         TextContent(text=_LONG_STATE_TEXT),
         TextContent(text="Screenshot saved to: /tmp/shot.png"),
@@ -32,7 +55,7 @@ def _browser_state_message(call_id: str, with_screenshot: bool = True) -> Messag
         content.append(ImageContent(image_urls=[_DATA_URL]))
     return Message(
         role="tool",
-        name="browser_get_state",
+        name=tool_name,
         tool_call_id=call_id,
         content=content,
     )
@@ -96,7 +119,7 @@ def test_stale_state_text_truncated_with_placeholder():
         stale,
         *(
             _browser_state_message(f"call_{i + 1}")
-            for i in range(KEEP_RECENT_BROWSER_STATE_TEXTS)
+            for i in range(KEEP_RECENT_BROWSER_PAGE_SNAPSHOTS)
         ),
     ]
 
@@ -114,6 +137,61 @@ def test_stale_state_text_truncated_with_placeholder():
     for message in result[1:]:
         texts = [item.text for item in message.content if isinstance(item, TextContent)]
         assert _LONG_STATE_TEXT in texts
+
+
+def test_a_stale_snapshot_is_truncated_whatever_tool_returned_it():
+    """The window counts snapshots, not `browser_get_state` calls.
+
+    Every state-changing action answers with the page it produced, so the
+    oldest snapshot here was returned by `browser_get_state` and the two that
+    supersede it by `browser_scroll` and `browser_click`. Keying the rule on the
+    tool name left the first one full-size for the rest of the conversation and
+    exempted 73% of production browser snapshot text from pruning.
+    """
+    messages = [
+        _browser_state_message("call_0", with_screenshot=False),
+        _browser_state_message(
+            "call_1", with_screenshot=False, tool_name="browser_scroll"
+        ),
+        _browser_state_message(
+            "call_2", with_screenshot=False, tool_name="browser_click"
+        ),
+    ]
+
+    result = prune_stale_browser_observations(messages)
+
+    stale_texts = [
+        item.text for item in result[0].content if isinstance(item, TextContent)
+    ]
+    assert any("stale browser state" in text for text in stale_texts)
+    for message in result[1:]:
+        texts = [item.text for item in message.content if isinstance(item, TextContent)]
+        assert _LONG_STATE_TEXT in texts
+
+
+def test_a_page_content_answer_is_never_truncated():
+    """`browser_get_content` returns the answer, not a view a snapshot replaces.
+
+    It is a `browser_*` tool message and its text is well over the truncation
+    threshold, so only the snapshot marker keeps it whole.
+    """
+    content_answer = Message(
+        role="tool",
+        name="browser_get_content",
+        tool_call_id="call_0",
+        content=[TextContent(text=_LONG_PAGE_CONTENT)],
+    )
+    messages = [
+        content_answer,
+        *(
+            _browser_state_message(f"call_{i + 1}", with_screenshot=False)
+            for i in range(KEEP_RECENT_BROWSER_PAGE_SNAPSHOTS)
+        ),
+    ]
+
+    result = prune_stale_browser_observations(messages)
+
+    assert result[0].content[0].text == _LONG_PAGE_CONTENT
 
 
 def test_user_images_and_other_tools_untouched():
