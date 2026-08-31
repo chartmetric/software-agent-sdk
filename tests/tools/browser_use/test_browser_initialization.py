@@ -288,3 +288,103 @@ class TestBrowserWarmUp:
 
         executor._ensure_initialized.assert_awaited_once()
         executor.cleanup.assert_awaited_once()
+
+
+class TestBrowserSessionRecovery:
+    """A browser session that failed to start must not be adopted forever.
+
+    `_init_browser_session` assigns `browser_session` before awaiting
+    `start()`, and returns early whenever that attribute is truthy. A start
+    that raises therefore used to leave a session with no root CDP client in
+    place permanently: every later action answered `Root CDP client not
+    initialized`, and nothing in the run could recover it.
+    """
+
+    def _executor(self, session):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        server = MagicMock()
+        server.browser_session = session
+        server.active_sessions = {}
+        server._init_browser_session = AsyncMock()
+        server._inject_scripts_to_session = AsyncMock()
+
+        with (
+            patch.object(
+                BrowserToolExecutor,
+                "_ensure_chromium_available",
+                return_value="/usr/bin/chromium",
+            ),
+            patch(
+                "openhands.tools.browser_use.impl.CustomBrowserUseServer",
+                return_value=server,
+            ),
+            patch("openhands.tools.browser_use.impl.run_with_timeout"),
+        ):
+            executor = BrowserToolExecutor()
+        # `run_with_timeout` is patched out above, so the init closure that
+        # would normally build the server never runs.
+        executor._server = server
+        executor._config = {"headless": True}
+        return executor, server
+
+    def _session(self, connected: bool):
+        from unittest.mock import AsyncMock, MagicMock
+
+        session = MagicMock()
+        session.id = "session-1"
+        session._cdp_client_root = MagicMock() if connected else None
+        session.kill = AsyncMock()
+        return session
+
+    @pytest.mark.asyncio
+    async def test_failed_start_is_discarded_so_the_next_action_retries(self):
+        # Arrange: the first start raises after the server has already stored
+        # the half-built session, exactly as browser-use leaves it.
+        half_started = self._session(connected=False)
+        executor, server = self._executor(session=None)
+
+        async def start_then_fail(**_kwargs):
+            server.browser_session = half_started
+            raise RuntimeError("BrowserStartEvent timed out after 30.0s")
+
+        server._init_browser_session.side_effect = start_then_fail
+
+        # Act
+        with pytest.raises(RuntimeError):
+            await executor._ensure_initialized()
+
+        # Assert: nothing is left for the next start to adopt.
+        assert server.browser_session is None
+        assert executor._initialized is False
+        half_started.kill.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_session_without_a_cdp_client_is_replaced(self):
+        # Arrange: a session object is present but never connected, and the
+        # executor believes it is initialized.
+        dead = self._session(connected=False)
+        executor, server = self._executor(session=dead)
+        executor._initialized = True
+
+        # Act
+        await executor._ensure_initialized()
+
+        # Assert: the dead session is dropped and a real start is attempted.
+        server._init_browser_session.assert_awaited_once()
+        dead.kill.assert_awaited_once()
+        assert executor._initialized is True
+
+    @pytest.mark.asyncio
+    async def test_live_session_is_not_restarted(self):
+        # Arrange
+        live = self._session(connected=True)
+        executor, server = self._executor(session=live)
+        executor._initialized = True
+
+        # Act
+        await executor._ensure_initialized()
+
+        # Assert
+        server._init_browser_session.assert_not_awaited()
+        live.kill.assert_not_awaited()

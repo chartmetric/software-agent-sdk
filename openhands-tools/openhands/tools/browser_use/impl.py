@@ -677,6 +677,17 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                     "(expected if browser crashed): %s",
                     e,
                 )
+            # `cleanup` closes *tracked* sessions, and a session that failed
+            # to start was never tracked -- so clear the server's reference
+            # directly, or `_init_browser_session` adopts the dead one again.
+            try:
+                self._async_executor.run_async(
+                    self._discard_browser_session, timeout=5.0
+                )
+            except Exception as e:
+                logger.debug(
+                    "Discarding the browser session during reset failed: %s", e
+                )
             self._initialized = False
             self._consecutive_failures = 0
             error_text = (
@@ -855,15 +866,69 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                 full_output_save_dir=self.full_output_save_dir,
             )
 
+    def _browser_session_is_live(self) -> bool:
+        """Whether the server holds a browser session with a root CDP client.
+
+        `_init_browser_session` assigns `browser_session` *before* awaiting
+        `start()`, so a start that raises (a launch that times out, for
+        instance) leaves a session object behind whose root CDP client was
+        never created. That object is truthy, and `_init_browser_session`
+        returns early on a truthy session, so nothing ever starts a browser
+        again: every later call fails with `Root CDP client not initialized`
+        for the rest of the run.
+
+        The question asked is whether the client exists, not whether its
+        socket is open this instant -- browser-use clears the client itself
+        when a connect fails, and a momentarily closed socket belongs to its
+        own reconnection path. Restarting on that would throw away a working
+        session's pages and logins for a blink.
+        """
+        session = getattr(self._server, "browser_session", None)
+        if session is None:
+            return False
+        return getattr(session, "_cdp_client_root", None) is not None
+
+    async def _discard_browser_session(self) -> None:
+        """Drop a session that cannot serve CDP calls, so a start can retry.
+
+        Best effort throughout: this runs on paths where the browser is
+        already known to be broken, and a failure to tear down the old one
+        must not stop the next action from launching a new one.
+        """
+        session = getattr(self._server, "browser_session", None)
+        if session is not None:
+            try:
+                if hasattr(session, "kill"):
+                    await session.kill()
+                elif hasattr(session, "close"):
+                    await session.close()
+            except Exception:
+                logger.debug("Killing the wedged browser session failed", exc_info=True)
+            active_sessions = getattr(self._server, "active_sessions", None)
+            if isinstance(active_sessions, dict):
+                # A session that never finished starting was never tracked, so
+                # `_close_all_sessions` would not have cleared it either.
+                active_sessions.pop(getattr(session, "id", None), None)
+        self._server.browser_session = None
+        self._server.tools = None
+        self._initialized = False
+
     async def _ensure_initialized(self):
         """Ensure browser session is initialized."""
-        if not self._initialized:
+        if self._initialized and self._browser_session_is_live():
+            return
+        if not self._browser_session_is_live():
+            await self._discard_browser_session()
+        try:
             # Initialize browser session with our config
             await self._server._init_browser_session(**self._config)
             # Inject any configured user scripts after session is ready
             # Note: rrweb scripts are injected lazily when recording starts
             await self._server._inject_scripts_to_session()
-            self._initialized = True
+        except Exception:
+            await self._discard_browser_session()
+            raise
+        self._initialized = True
 
     async def warm_up(self) -> None:
         """Launch and tear down a browser session once to warm the OS caches.
