@@ -191,7 +191,8 @@ def test_a_page_content_answer_is_never_truncated():
 
     result = prune_stale_browser_observations(messages)
 
-    assert result[0].content[0].text == _LONG_PAGE_CONTENT
+    texts = [item.text for item in result[0].content if isinstance(item, TextContent)]
+    assert texts == [_LONG_PAGE_CONTENT]
 
 
 def test_user_images_and_other_tools_untouched():
