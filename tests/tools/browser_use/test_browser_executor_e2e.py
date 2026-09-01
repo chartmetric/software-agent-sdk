@@ -13,6 +13,7 @@ import pytest
 from openhands.tools.browser_use.definition import (
     BrowserClickAction,
     BrowserCloseTabAction,
+    BrowserFindAction,
     BrowserGetContentAction,
     BrowserGetStateAction,
     BrowserGetStorageAction,
@@ -69,6 +70,7 @@ TEST_HTML = """<!DOCTYPE html>
 
         <h2 id="section2">Section 2</h2>
         <p>You've reached section 2!</p>
+        <div style="opacity: 0"><h2>Hidden Section</h2></div>
         <a href="page2.html" id="external-link">Go to Page 2</a>
     </div>
 
@@ -248,6 +250,71 @@ class TestBrowserExecutorE2E:
         # Note: browser-use 0.10.1 has a bug where page title is not properly
         # extracted from <title> tag. We check for URL instead.
         assert test_server in result.text
+
+        state = json.loads(result.text)
+        outline = state["semantic_outline"]["items"]
+        assert any(
+            item["name"] == "Section 2"
+            and item["kind"] == "heading"
+            and item["y"] > 1000
+            for item in outline
+        )
+        assert all(item["name"] != "Hidden Section" for item in outline)
+        hidden = browser_executor(BrowserFindAction(text="Hidden Section"))
+        assert json.loads(hidden.text)["matches"] == []
+
+    def test_find_visible_text_without_moving_the_page(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        browser_executor(BrowserNavigateAction(url=test_server))
+        before = browser_executor(BrowserGetStateAction(include_screenshot=False))
+
+        result = browser_executor(BrowserFindAction(text="reached section 2"))
+        after = browser_executor(BrowserGetStateAction(include_screenshot=False))
+
+        assert not result.is_error
+        finding = json.loads(result.text)
+        assert len(finding["matches"]) == 1
+        match = finding["matches"][0]
+        assert match["tag"] == "p"
+        assert match["text"] == "You've reached section 2!"
+        assert match["heading"] == "Section 2"
+        assert match["y"] > 1000
+        assert json.loads(after.text)["scroll"] == json.loads(before.text)["scroll"]
+
+    def test_find_bounds_work_on_a_large_matching_document(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        browser_executor(BrowserNavigateAction(url=test_server))
+
+        async def add_matching_nodes():
+            session = browser_executor._server.browser_session
+            assert session is not None
+            page = await session.get_current_page()
+            assert page is not None
+            return await page.evaluate(
+                """() => {
+                  const fragment = document.createDocumentFragment();
+                  for (let index = 0; index < 5000; index += 1) {
+                    const item = document.createElement('p');
+                    item.textContent = `Repeated result ${index}`;
+                    fragment.appendChild(item);
+                  }
+                  document.body.appendChild(fragment);
+                }"""
+            )
+
+        browser_executor._async_executor.run_async(add_matching_nodes(), timeout=10)
+        started = time.perf_counter()
+
+        result = browser_executor(
+            BrowserFindAction(text="Repeated result", max_results=10)
+        )
+
+        assert time.perf_counter() - started < 5
+        finding = json.loads(result.text)
+        assert len(finding["matches"]) == 10
+        assert finding["truncated"] is True
 
     def test_get_state_with_screenshot(
         self, browser_executor: BrowserToolExecutor, test_server: str

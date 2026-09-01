@@ -19,10 +19,12 @@ from openhands.sdk.utils.async_executor import AsyncExecutor
 from openhands.tools.browser_use.definition import (
     BrowserClickAction,
     BrowserFillFormAction,
+    BrowserFindAction,
     BrowserFormField,
     BrowserGetStateAction,
     BrowserNavigateAction,
     BrowserObservation,
+    BrowserSetViewportAction,
 )
 from openhands.tools.browser_use.impl import (
     DEFAULT_BROWSER_ACTION_TIMEOUT_SECONDS,
@@ -246,6 +248,20 @@ async def test_browser_executor_action_routing_get_state(
 
     mock_get_state.assert_called_once_with(True)
     assert result is expected_observation
+
+
+@patch("openhands.tools.browser_use.impl.BrowserToolExecutor.find_visible_text")
+async def test_browser_executor_action_routing_find(
+    mock_find_visible_text, mock_browser_executor
+):
+    mock_find_visible_text.return_value = '{"matches": []}'
+
+    result = await mock_browser_executor._execute_action(
+        BrowserFindAction(text="Audience", max_results=5)
+    )
+
+    mock_find_visible_text.assert_awaited_once_with("Audience", 5)
+    assert_browser_observation_success(result, '"matches": []')
 
 
 async def test_browser_executor_unsupported_action_handling(mock_browser_executor):
@@ -661,6 +677,26 @@ async def test_a_click_returns_the_page_it_produced(mock_click, mock_browser_exe
     assert '"index": 7' in text
 
 
+@patch("openhands.tools.browser_use.impl.BrowserToolExecutor.set_viewport")
+async def test_set_viewport_returns_the_page_it_produced(
+    mock_set_viewport, mock_browser_executor
+):
+    mock_set_viewport.return_value = "Viewport set to 390x844"
+    mock_browser_executor._server._get_browser_state = AsyncMock(
+        return_value='{"interactive_elements": [{"index": 3, "text": "Menu"}]}'
+    )
+
+    result = await mock_browser_executor._execute_action(
+        BrowserSetViewportAction(width=390, height=844)
+    )
+
+    text = "".join(
+        block.text for block in result.content if isinstance(block, TextContent)
+    )
+    assert "Viewport set to 390x844" in text
+    assert '"index": 3' in text
+
+
 @patch("openhands.tools.browser_use.impl.BrowserToolExecutor.click")
 async def test_a_click_still_succeeds_when_the_page_cannot_be_read(
     mock_click, mock_browser_executor
@@ -689,8 +725,6 @@ async def test_set_viewport_resizes_the_page_already_open() -> None:
     A second session would have to log in again before it could show the surface
     under review, so a mobile capture taken there is a login page.
     """
-    from openhands.tools.browser_use.definition import BrowserSetViewportAction
-
     page = AsyncMock()
     browser_session = AsyncMock()
     browser_session.get_current_page = AsyncMock(return_value=page)

@@ -656,6 +656,62 @@ class BrowserGetContentTool(
 
 
 # ============================================
+# `browser_find`
+# ============================================
+class BrowserFindAction(BrowserAction):
+    """Schema for locating rendered text without moving the page."""
+
+    text: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Visible text to locate, matched case-insensitively.",
+    )
+    max_results: int = Field(
+        default=10,
+        ge=1,
+        le=20,
+        description="Maximum matching elements to return. Default: 10.",
+    )
+
+
+BROWSER_FIND_DESCRIPTION = """Find visible rendered text anywhere in the current document without scrolling.
+
+Returns the deepest matching elements with their text, semantic heading context,
+absolute page position, and whether each match is above, inside, or below the
+viewport. It searches the rendered document rather than scripts or hidden data.
+
+Use this before concluding a named section, label, value, error, or empty state is
+absent. A missing result can still mean a deferred section has not rendered; inspect
+`semantic_outline` and `pages_below`, then walk the page to mount deferred content.
+"""  # noqa: E501
+
+
+class BrowserFindTool(
+    _SharesOneBrowserSession,
+    ToolDefinition[BrowserFindAction, BrowserObservation],
+):
+    """Tool for locating visible text in the rendered document."""
+
+    @classmethod
+    def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:
+        return [
+            cls(
+                description=BROWSER_FIND_DESCRIPTION,
+                action_type=BrowserFindAction,
+                observation_type=BrowserObservation,
+                annotations=ToolAnnotations(
+                    title="browser_find",
+                    readOnlyHint=True,
+                    destructiveHint=False,
+                    idempotentHint=True,
+                    openWorldHint=True,
+                ),
+                executor=executor,
+            )
+        ]
+
+
+# ============================================
 # `browser_scroll`
 # ============================================
 class BrowserScrollAction(BrowserAction):
@@ -1261,6 +1317,7 @@ def _sequence_step_actions() -> dict[str, type[BrowserAction]]:
         "type": BrowserTypeAction,
         "get_state": BrowserGetStateAction,
         "get_content": BrowserGetContentAction,
+        "find": BrowserFindAction,
         "scroll": BrowserScrollAction,
         "go_back": BrowserGoBackAction,
         "list_tabs": BrowserListTabsAction,
@@ -1274,7 +1331,7 @@ class BrowserSequenceStep(BaseModel):
     action: str = Field(
         description=(
             "Which browser action to run. One of: "
-            "navigate, click, type, get_state, get_content, scroll, "
+            "navigate, click, type, get_state, get_content, find, scroll, "
             "go_back, list_tabs, switch_tab. Use browser_fill_form on its own: "
             "its fields are objects, which a step's flat arguments cannot carry."
         )
@@ -1456,6 +1513,7 @@ class BrowserToolSet(ToolDefinition[BrowserAction, BrowserObservation]):
             BrowserClickTool,
             BrowserGetStateTool,
             BrowserGetContentTool,
+            BrowserFindTool,
             BrowserGetSecretTool,
             BrowserTypeTool,
             BrowserFillFormTool,
