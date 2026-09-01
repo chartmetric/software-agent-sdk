@@ -1087,3 +1087,33 @@ class TestBrowserExecutorE2E:
                 except Exception as e:
                     # Ignore errors during cleanup but log for debugging purposes
                     print(f"Warning: failed to close BrowserToolExecutor cleanly: {e}")
+
+
+@pytest.mark.e2e
+class TestSemanticOutlineDeferredSection:
+    """A container you cannot see listed is a container you cannot go to."""
+
+    def test_a_nameless_container_with_an_id_is_still_listed(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        """The outline used to drop exactly the row that matters here.
+
+        It skipped any landmark with no accessible name -- and a deferred
+        section is nameless *because* it has not mounted: its heading is inside
+        the part that has not rendered. So the one handle that would reach it,
+        its id, was the one thing the page state did not report, and `to_id`
+        had nothing to be given.
+        """
+        browser_executor(
+            BrowserNavigateAction(url=f"{test_server}/deferred.html")
+        )
+
+        state = browser_executor(BrowserGetStateAction(include_screenshot=False))
+        text = " ".join(
+            getattr(block, "text", "") or "" for block in (state.content or [])
+        )
+
+        assert "deferred-section" in text, (
+            "the deferred container is missing from the semantic outline, so "
+            "nothing can tell a run the id that would reach it"
+        )

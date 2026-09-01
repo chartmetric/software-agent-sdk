@@ -56,14 +56,23 @@ SEMANTIC_OUTLINE_SCRIPT = r"""
     const explicitRole = (element.getAttribute('role') || '').toLowerCase();
     const isHeading = /^h[1-6]$/.test(tag) || explicitRole === 'heading';
     const name = isHeading ? text(element) : labelledName(element);
-    if (!name && !['main', 'nav', 'aside'].includes(tag)) continue;
+    // A landmark with neither a name nor an id says nothing worth a row. One
+    // with an id says plenty even when it has no name yet -- that is exactly
+    // the deferred section: its heading lives inside the part that has not
+    // rendered, so it is nameless *because* it has not mounted, and dropping it
+    // here hides the one handle that would reach it. `browser_scroll to_id`
+    // can go straight to it; nothing can go to a row that was never listed.
+    if (!name && !element.id && !['main', 'nav', 'aside'].includes(tag)) continue;
     const role = explicitRole || (
       tag === 'nav' ? 'navigation'
       : tag === 'aside' ? 'complementary'
       : tag === 'main' ? 'main'
       : tag
     );
-    const inferredName = name || role;
+    // For a nameless-but-identified container, the role alone ("section") tells
+    // a reader nothing and reads like a row not worth acting on. Naming it by
+    // its id, and saying it is empty, is what makes it actionable.
+    const inferredName = name || (element.id ? '#' + element.id + ' (empty)' : role);
     all.push({
       kind: isHeading ? 'heading' : 'landmark',
       tag,
