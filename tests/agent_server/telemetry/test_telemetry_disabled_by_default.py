@@ -42,13 +42,8 @@ async def test_kill_switch_short_circuits_delivery(config_factory, monkeypatch):
 def test_importing_the_telemetry_package_does_not_import_posthog():
     """The optional dependency must stay off the import path by default.
 
-    Note on scope: this asserts that *this package* does not import posthog,
-    not that ``posthog`` is absent from ``sys.modules`` after a full server
-    startup. It cannot assert the latter, because the unrelated pre-existing
-    ``browser-use`` dependency imports posthog transitively when the tool
-    preload service starts. The claim under test — that a telemetry-disabled
-    server never pulls the vendor SDK in *on telemetry's behalf* — is captured
-    precisely by checking our own exporter module stays unimported.
+    This asserts that a telemetry-disabled server does not import the optional
+    vendor SDK while constructing the application.
 
     Run in a subprocess so an import elsewhere in the test session cannot mask
     a regression.

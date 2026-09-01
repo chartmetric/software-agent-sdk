@@ -34,6 +34,7 @@ FROM python:3.13-bookworm AS builder
 ARG USERNAME UID GID ENABLE_VERTEX
 ENV UV_PROJECT_ENVIRONMENT=/agent-server/.venv
 ENV UV_PYTHON_INSTALL_DIR=/agent-server/uv-managed-python
+ENV PLAYWRIGHT_BROWSERS_PATH=/agent-server/playwright-browsers
 
 # uv 0.11.5+ embeds python-build-standalone 20260408 metadata, which is the
 # first release with the PT_GNU_STACK fix. Pin to 0.11.6 (latest at time of
@@ -58,6 +59,7 @@ RUN --mount=type=cache,target=/home/${USERNAME}/.cache,uid=${UID},gid=${GID} \
     uv python install 3.13 && \
     uv venv --python-preference only-managed --python 3.13 .venv && \
     uv sync --frozen --no-editable --managed-python --extra boto3 $EXTRA_FLAGS && \
+    .venv/bin/playwright install chromium --no-shell && \
     readlink -f .venv/bin/python | grep -q '^/agent-server/uv-managed-python/'
 
 ####################################################################################
@@ -369,11 +371,13 @@ EXPOSE ${PORT} ${NOVNC_PORT}
 ############################
 FROM base-image AS source
 ARG USERNAME
+ENV PLAYWRIGHT_BROWSERS_PATH=/agent-server/playwright-browsers
 COPY --chown=${USERNAME}:${USERNAME} --from=builder /agent-server /agent-server
 ENTRYPOINT ["tini", "--", "/agent-server/.venv/bin/python", "-m", "openhands.agent_server"]
 
 FROM base-image-minimal AS source-minimal
 ARG USERNAME
+ENV PLAYWRIGHT_BROWSERS_PATH=/agent-server/playwright-browsers
 COPY --chown=${USERNAME}:${USERNAME} --from=builder /agent-server /agent-server
 ENTRYPOINT ["tini", "--", "/agent-server/.venv/bin/python", "-m", "openhands.agent_server"]
 
@@ -386,7 +390,9 @@ FROM base-image AS binary
 ARG USERNAME
 
 COPY --chown=${USERNAME}:${USERNAME} --from=binary-builder /agent-server/dist/openhands-agent-server /usr/local/bin/openhands-agent-server
+COPY --chown=${USERNAME}:${USERNAME} --from=builder /agent-server/playwright-browsers /opt/playwright-browsers
 RUN chmod +x /usr/local/bin/openhands-agent-server
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 # Fix library path to use system GCC libraries instead of bundled ones
 ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENTRYPOINT ["tini", "--", "/usr/local/bin/openhands-agent-server"]
@@ -394,7 +400,9 @@ ENTRYPOINT ["tini", "--", "/usr/local/bin/openhands-agent-server"]
 FROM base-image-minimal AS binary-minimal
 ARG USERNAME
 COPY --chown=${USERNAME}:${USERNAME} --from=binary-builder /agent-server/dist/openhands-agent-server /usr/local/bin/openhands-agent-server
+COPY --chown=${USERNAME}:${USERNAME} --from=builder /agent-server/playwright-browsers /opt/playwright-browsers
 RUN chmod +x /usr/local/bin/openhands-agent-server
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 # Fix library path to use system GCC libraries instead of bundled ones
 ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENTRYPOINT ["tini", "--", "/usr/local/bin/openhands-agent-server"]

@@ -247,8 +247,7 @@ class TestBrowserExecutorE2E:
         assert not result.is_error
         # Check for interactive elements which are reliably present
         assert "Click Me" in result.text
-        # Note: browser-use 0.10.1 has a bug where page title is not properly
-        # extracted from <title> tag. We check for URL instead.
+        # The URL is a stable part of the state contract.
         assert test_server in result.text
 
         state = json.loads(result.text)

@@ -291,23 +291,20 @@ class TestBrowserWarmUp:
 
 
 class TestBrowserSessionRecovery:
-    """A browser session that failed to start must not be adopted forever.
+    """A failed Playwright browser is closed before launch is retried."""
 
-    `_init_browser_session` assigns `browser_session` before awaiting
-    `start()`, and returns early whenever that attribute is truthy. A start
-    that raises therefore used to leave a session with no root CDP client in
-    place permanently: every later action answered `Root CDP client not
-    initialized`, and nothing in the run could recover it.
-    """
-
-    def _executor(self, session):
+    def _executor(self, is_live: bool):
         from unittest.mock import AsyncMock, MagicMock, patch
 
         server = MagicMock()
-        server.browser_session = session
-        server.active_sessions = {}
-        server._init_browser_session = AsyncMock()
+        server.is_live = is_live
+
+        async def start(**_config):
+            server.is_live = True
+
+        server._init_browser_session = AsyncMock(side_effect=start)
         server._inject_scripts_to_session = AsyncMock()
+        server.close = AsyncMock()
 
         with (
             patch.object(
@@ -328,25 +325,12 @@ class TestBrowserSessionRecovery:
         executor._config = {"headless": True}
         return executor, server
 
-    def _session(self, connected: bool):
-        from unittest.mock import AsyncMock, MagicMock
-
-        session = MagicMock()
-        session.id = "session-1"
-        session._cdp_client_root = MagicMock() if connected else None
-        session.kill = AsyncMock()
-        return session
-
     @pytest.mark.asyncio
     async def test_failed_start_is_discarded_so_the_next_action_retries(self):
-        # Arrange: the first start raises after the server has already stored
-        # the half-built session, exactly as browser-use leaves it.
-        half_started = self._session(connected=False)
-        executor, server = self._executor(session=None)
+        executor, server = self._executor(is_live=False)
 
         async def start_then_fail(**_kwargs):
-            server.browser_session = half_started
-            raise RuntimeError("BrowserStartEvent timed out after 30.0s")
+            raise RuntimeError("Playwright launch timed out")
 
         server._init_browser_session.side_effect = start_then_fail
 
@@ -354,37 +338,26 @@ class TestBrowserSessionRecovery:
         with pytest.raises(RuntimeError):
             await executor._ensure_initialized()
 
-        # Assert: nothing is left for the next start to adopt.
-        assert server.browser_session is None
         assert executor._initialized is False
-        half_started.kill.assert_awaited_once()
+        assert server.close.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_session_without_a_cdp_client_is_replaced(self):
-        # Arrange: a session object is present but never connected, and the
-        # executor believes it is initialized.
-        dead = self._session(connected=False)
-        executor, server = self._executor(session=dead)
+    async def test_disconnected_browser_is_replaced(self):
+        executor, server = self._executor(is_live=False)
         executor._initialized = True
 
-        # Act
         await executor._ensure_initialized()
 
-        # Assert: the dead session is dropped and a real start is attempted.
         server._init_browser_session.assert_awaited_once()
-        dead.kill.assert_awaited_once()
+        server.close.assert_awaited_once()
         assert executor._initialized is True
 
     @pytest.mark.asyncio
     async def test_live_session_is_not_restarted(self):
-        # Arrange
-        live = self._session(connected=True)
-        executor, server = self._executor(session=live)
+        executor, server = self._executor(is_live=True)
         executor._initialized = True
 
-        # Act
         await executor._ensure_initialized()
 
-        # Assert
         server._init_browser_session.assert_not_awaited()
-        live.kill.assert_not_awaited()
+        server.close.assert_not_awaited()

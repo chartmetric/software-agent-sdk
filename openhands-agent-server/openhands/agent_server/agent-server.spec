@@ -59,6 +59,10 @@ else:
         "Install openhands-sdk[vertex] before building to include it."
     )
 
+_playwright_datas, _playwright_binaries, _playwright_hiddenimports = collect_all(
+    "playwright"
+)
+
 # Get the project root directory (current working directory when running PyInstaller)
 project_root = Path.cwd()
 # Namespace roots must be in pathex so PyInstaller can find 'openhands/...'
@@ -107,6 +111,7 @@ a = Analysis(
     [ENTRY],
     pathex=PATHEX,
     binaries=[
+        *_playwright_binaries,
         # Vertex AI SDK binaries (collected via collect_all above)
         *_vertex_binaries,
     ],
@@ -118,6 +123,7 @@ a = Analysis(
         *collect_data_files("fastmcp"),
         *collect_data_files("mcp"),
         *collect_data_files("fakeredis"),  # Required for commands.json used by fakeredis ACL
+        *_playwright_datas,
         *get_fakeredis_data(),  # Ensure fakeredis/model/ directory structure exists
 
         # OpenHands SDK prompt templates (adjusted for shallow namespace layout)
@@ -161,6 +167,7 @@ a = Analysis(
         *collect_submodules("litellm"),
         *collect_submodules("fastmcp"),
         *collect_submodules("fakeredis"),
+        *_playwright_hiddenimports,
         *collect_submodules("lupa"),  # Required for fakeredis[lua] Lua scripting support
         # rich._unicode_data.unicodeX_Y_Z is imported dynamically based on
         # unicodedata.unidata_version (e.g. unicode17_0_0 on Python 3.13).

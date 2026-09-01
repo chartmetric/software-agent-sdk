@@ -18,7 +18,7 @@ def test_tools_module_has_expected_top_level_exports():
     """Common tools/presets should be importable from the top-level package.
 
     Note: BrowserToolSet is intentionally NOT exported at the top level to avoid
-    forcing downstream consumers to bundle browser-use and its heavy dependencies.
+    forcing downstream consumers to bundle Playwright and Chromium.
     See: https://github.com/OpenHands/OpenHands-CLI/pull/527
     """
 

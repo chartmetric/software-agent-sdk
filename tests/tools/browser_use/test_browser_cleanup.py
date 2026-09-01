@@ -217,19 +217,11 @@ class TestBrowserCleanup:
 
         mock_executor._async_executor.close.assert_called_once()
 
-    def test_del_method_calls_close(self, mock_executor):
-        """Test that __del__ method calls close."""
+    def test_del_never_blocks_on_cross_thread_cleanup(self, mock_executor):
         with patch.object(mock_executor, "close") as mock_close:
             mock_executor.__del__()
-            mock_close.assert_called_once()
 
-    def test_del_method_handles_close_exception(self, mock_executor):
-        """Test that __del__ method handles close exceptions gracefully."""
-        with patch.object(
-            mock_executor, "close", side_effect=Exception("Close failed")
-        ):
-            # Should not raise exception
-            mock_executor.__del__()
+        mock_close.assert_not_called()
 
     def test_close_method_timeout_configuration(self, mock_executor):
         """Test that close method uses correct timeout for cleanup."""
