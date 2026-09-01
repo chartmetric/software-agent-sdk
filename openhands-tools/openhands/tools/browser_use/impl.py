@@ -1,4 +1,4 @@
-"""Browser tool executor implementation using browser-use MCP server wrapper."""
+"""Browser tool executor backed by a persistent Playwright Chromium session."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -20,9 +19,8 @@ from typing import TYPE_CHECKING, Any, Final, TypeVar
 if TYPE_CHECKING:
     from openhands.sdk.conversation import LocalConversation
 
-from openhands.sdk.logger import DEBUG, get_logger
+from openhands.sdk.logger import get_logger
 from openhands.sdk.tool import ToolExecutor
-from openhands.sdk.utils import sanitized_env
 from openhands.sdk.utils.async_executor import AsyncExecutor
 from openhands.tools.browser_use.definition import (
     BROWSER_RECORDING_OUTPUT_DIR,
@@ -30,6 +28,7 @@ from openhands.tools.browser_use.definition import (
     BrowserFillFormAction,
     BrowserFormField,
     BrowserGetSecretAction,
+    BrowserGetStateAction,
     BrowserObservation,
     BrowserSequenceAction,
     BrowserTypeAction,
@@ -91,12 +90,6 @@ def recording_aware(
     return wrapper
 
 
-# Suppress browser-use logging for cleaner integration
-if DEBUG:
-    logging.getLogger("browser_use").setLevel(logging.DEBUG)
-else:
-    logging.getLogger("browser_use").setLevel(logging.WARNING)
-
 logger = get_logger(__name__)
 
 DEFAULT_BROWSER_ACTION_TIMEOUT_SECONDS: Final[float] = 300.0
@@ -156,15 +149,23 @@ def _standard_chromium_paths(platform: str | None = None) -> list[Path]:
 
 
 def _playwright_cache_dirs(platform: str | None = None) -> list[Path]:
+    configured = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    configured_dirs = [Path(configured)] if configured else []
     match _current_platform(platform):
         case "darwin":
-            return [Path.home() / "Library" / "Caches" / "ms-playwright"]
+            return [
+                *configured_dirs,
+                Path.home() / "Library" / "Caches" / "ms-playwright",
+            ]
         case "win32":
             if local_app_data := os.environ.get("LOCALAPPDATA"):
-                return [Path(local_app_data) / "ms-playwright"]
-            return [Path.home() / "AppData" / "Local" / "ms-playwright"]
+                return [*configured_dirs, Path(local_app_data) / "ms-playwright"]
+            return [
+                *configured_dirs,
+                Path.home() / "AppData" / "Local" / "ms-playwright",
+            ]
         case _:
-            return [Path.home() / ".cache" / "ms-playwright"]
+            return [*configured_dirs, Path.home() / ".cache" / "ms-playwright"]
 
 
 def _playwright_chromium_paths(
@@ -233,43 +234,13 @@ def _format_browser_operation_error(
     return f"Browser operation failed: {error_detail}"
 
 
-def _install_chromium() -> bool:
-    """Attempt to install Chromium via uvx playwright install."""
-    try:
-        # Check if uvx is available
-        if not shutil.which("uvx"):
-            logger.warning("uvx not found - cannot auto-install Chromium")
-            return False
-
-        logger.info("Attempting to install Chromium via uvx...")
-        result = subprocess.run(
-            ["uvx", "playwright", "install", "chromium", "--with-deps", "--no-shell"],
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minutes timeout for installation
-            env=sanitized_env(),
-        )
-
-        if result.returncode == 0:
-            logger.info("Chromium installation completed successfully")
-            return True
-        else:
-            logger.error(f"Chromium installation failed: {result.stderr}")
-            return False
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-        logger.error(f"Error during Chromium installation: {e}")
-        return False
-
-
 def _get_chromium_error_message() -> str:
     """Get the error message for when Chromium is not available."""
     return (
         "Chromium is required for browser operations but is not installed.\n\n"
         "To install Chromium, run one of the following commands:\n"
-        "  1. Using uvx (recommended): uvx playwright install chromium "
-        "--with-deps --no-shell\n"
-        "  2. Using pip: pip install playwright && playwright install chromium\n"
-        "  3. Using system package manager:\n"
+        "  1. Run: python -m playwright install chromium --with-deps --no-shell\n"
+        "  2. Using system package manager:\n"
         "     - Ubuntu/Debian: sudo apt install chromium-browser\n"
         "     - macOS: brew install chromium\n"
         "     - Windows: winget install Chromium.Chromium\n\n"
@@ -278,7 +249,7 @@ def _get_chromium_error_message() -> str:
 
 
 class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
-    """Executor that wraps browser-use MCP server for OpenHands integration."""
+    """Executor that exposes the persistent Playwright browser as SDK tools."""
 
     _server: CustomBrowserUseServer
     _config: dict[str, Any]
@@ -297,13 +268,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         Returns:
             Path to Chromium binary if found, None otherwise
         """
-        # Check standard installation paths (prefer full Chrome installs)
-        for path in _standard_chromium_paths():
-            if path.exists():
-                return str(path)
-
-        # Check Playwright-installed Chromium (preferred over PATH lookups
-        # because PATH binaries like homebrew chromium may lack CDP support)
+        # Prefer the browser shipped for this exact Playwright version.
         for playwright_cache in _playwright_cache_dirs():
             if playwright_cache.exists():
                 chromium_dirs = list(playwright_cache.glob("chromium-*"))
@@ -311,6 +276,10 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                     for path in _playwright_chromium_paths(chromium_dir):
                         if path.exists():
                             return str(path)
+
+        for path in _standard_chromium_paths():
+            if path.exists():
+                return str(path)
 
         # Fallback: check PATH for any chromium-based binary
         for binary in _path_binary_candidates():
@@ -429,6 +398,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         # which reuse the same executor instance via
         # BrowserToolSet.get_or_create_shared_executor().
         self._control_owner = "agent"
+        self._sequence_suppresses_automatic_state = False
         # Keep the path returned to the model independent of repository and
         # workspace names. Those names can legitimately equal a configured
         # secret value, which would redact the path and make publication fail.
@@ -457,32 +427,45 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         known = _sequence_step_actions()
         parts: list[str] = []
         last: BrowserObservation | None = None
+        last_action: BrowserAction | None = None
 
-        for position, step in enumerate(action.steps, start=1):
-            action_type = known.get(step.action)
-            if action_type is None:
-                parts.append(
-                    f"step {position} ({step.action}): unknown action. "
-                    f"Available: {', '.join(sorted(known))}"
-                )
-                return self._sequence_observation(parts, last, is_error=True)
-            try:
-                step_action = action_type.model_validate(step.arguments)
-            except Exception as exc:
-                parts.append(
-                    f"step {position} ({step.action}): arguments rejected -- {exc}"
-                )
-                return self._sequence_observation(parts, last, is_error=True)
-
-            observation = self(step_action, conversation)
-            last = observation
-            parts.append(f"step {position} ({step.action}):\n{observation.text}")
-            if getattr(observation, "is_error", False):
-                remaining = len(action.steps) - position
-                if remaining:
+        self._sequence_suppresses_automatic_state = True
+        try:
+            for position, step in enumerate(action.steps, start=1):
+                action_type = known.get(step.action)
+                if action_type is None:
                     parts.append(
-                        f"Stopped here. The remaining {remaining} step(s) were not run."
+                        f"step {position} ({step.action}): unknown action. "
+                        f"Available: {', '.join(sorted(known))}"
                     )
+                    return self._sequence_observation(parts, last, is_error=True)
+                try:
+                    step_action = action_type.model_validate(step.arguments)
+                except Exception as exc:
+                    parts.append(
+                        f"step {position} ({step.action}): arguments rejected -- {exc}"
+                    )
+                    return self._sequence_observation(parts, last, is_error=True)
+
+                observation = self(step_action, conversation)
+                last = observation
+                last_action = step_action
+                parts.append(f"step {position} ({step.action}):\n{observation.text}")
+                if getattr(observation, "is_error", False):
+                    remaining = len(action.steps) - position
+                    if remaining:
+                        parts.append(
+                            f"Stopped here. The remaining {remaining} step(s) "
+                            "were not run."
+                        )
+                    return self._sequence_observation(parts, last, is_error=True)
+        finally:
+            self._sequence_suppresses_automatic_state = False
+
+        if not isinstance(last_action, BrowserGetStateAction):
+            last = self(BrowserGetStateAction(), conversation)
+            parts.append(f"final state:\n{last.text}")
+            if getattr(last, "is_error", False):
                 return self._sequence_observation(parts, last, is_error=True)
 
         return self._sequence_observation(parts, last, is_error=False)
@@ -820,7 +803,9 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                     full_output_save_dir=self.full_output_save_dir,
                 )
 
-            if isinstance(action, _STATE_CHANGING_ACTIONS):
+            if isinstance(action, _STATE_CHANGING_ACTIONS) and not (
+                getattr(self, "_sequence_suppresses_automatic_state", False)
+            ):
                 # Return the page the action produced, not just what the action
                 # did. Every state-changing browser call used to be followed by
                 # a separate `browser_get_state` purely to find out what
@@ -871,26 +856,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             )
 
     def _browser_session_is_live(self) -> bool:
-        """Whether the server holds a browser session with a root CDP client.
-
-        `_init_browser_session` assigns `browser_session` *before* awaiting
-        `start()`, so a start that raises (a launch that times out, for
-        instance) leaves a session object behind whose root CDP client was
-        never created. That object is truthy, and `_init_browser_session`
-        returns early on a truthy session, so nothing ever starts a browser
-        again: every later call fails with `Root CDP client not initialized`
-        for the rest of the run.
-
-        The question asked is whether the client exists, not whether its
-        socket is open this instant -- browser-use clears the client itself
-        when a connect fails, and a momentarily closed socket belongs to its
-        own reconnection path. Restarting on that would throw away a working
-        session's pages and logins for a blink.
-        """
-        session = getattr(self._server, "browser_session", None)
-        if session is None:
-            return False
-        return getattr(session, "_cdp_client_root", None) is not None
+        return self._server.is_live
 
     async def _discard_browser_session(self) -> None:
         """Drop a session that cannot serve CDP calls, so a start can retry.
@@ -899,22 +865,10 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         already known to be broken, and a failure to tear down the old one
         must not stop the next action from launching a new one.
         """
-        session = getattr(self._server, "browser_session", None)
-        if session is not None:
-            try:
-                if hasattr(session, "kill"):
-                    await session.kill()
-                elif hasattr(session, "close"):
-                    await session.close()
-            except Exception:
-                logger.debug("Killing the wedged browser session failed", exc_info=True)
-            active_sessions = getattr(self._server, "active_sessions", None)
-            if isinstance(active_sessions, dict):
-                # A session that never finished starting was never tracked, so
-                # `_close_all_sessions` would not have cleared it either.
-                active_sessions.pop(getattr(session, "id", None), None)
-        self._server.browser_session = None
-        self._server.tools = None
+        try:
+            await self._server.close()
+        except Exception:
+            logger.debug("Closing the wedged browser session failed", exc_info=True)
         self._initialized = False
 
     async def _ensure_initialized(self):
@@ -1216,11 +1170,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             if self._video_recorder.is_recording:
                 await self._video_recorder.stop()
             # Use _close_all_sessions instead of close_browser because it calls
-            # session.kill() which properly stops the event bus and drains
-            # pending events (including BrowserKillEvent that terminates the
-            # Chromium subprocess). close_browser() alone dispatches
-            # BrowserKillEvent fire-and-forget and returns before it's processed,
-            # which can leave the browser process alive.
+            # The server closes Playwright context, browser, and driver in order.
             if hasattr(self._server, "_close_all_sessions"):
                 await self._server._close_all_sessions()
             else:
@@ -1287,8 +1237,4 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                 BrowserToolSet._shared_executor = None
 
     def __del__(self):
-        """Cleanup on deletion."""
-        try:
-            self.close()
-        except Exception:
-            pass  # Ignore cleanup errors during deletion
+        """Never block garbage collection on cross-thread browser cleanup."""

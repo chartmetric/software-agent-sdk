@@ -611,7 +611,7 @@ class BrowserGetStateTool(
 # `browser_get_content`
 # ============================================
 class BrowserGetContentAction(BrowserAction):
-    """Schema for getting page content in markdown."""
+    """Schema for getting rendered page text."""
 
     extract_links: bool = Field(
         default=False,
@@ -624,7 +624,7 @@ class BrowserGetContentAction(BrowserAction):
     )
 
 
-BROWSER_GET_CONTENT_DESCRIPTION = """Extract the main content of the current page in clean markdown format. It has been filtered to remove noise and advertising content.
+BROWSER_GET_CONTENT_DESCRIPTION = """Extract the current page's rendered text without scripts, styles, or hidden DOM data. Links can optionally be appended in Markdown form.
 
 If the content was truncated and you need more information, use start_from_char parameter to continue from where truncation occurred.
 """  # noqa: E501
@@ -634,7 +634,7 @@ class BrowserGetContentTool(
     _SharesOneBrowserSession,
     ToolDefinition[BrowserGetContentAction, BrowserObservation],
 ):
-    """Tool for getting page content in markdown."""
+    """Tool for getting rendered page content."""
 
     @classmethod
     def create(cls, executor: "BrowserToolExecutor") -> Sequence[Self]:

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from litellm.types.utils import ModelResponse
 from pydantic import SecretStr
 
@@ -370,30 +371,17 @@ def test_completion_telemetry_callback_masks_live_secret_context():
 
 
 async def test_browser_server_marks_secret_input_as_sensitive():
-    node = MagicMock()
-    type_event = MagicMock()
-    completed = asyncio.get_running_loop().create_future()
-    completed.set_result(None)
-    browser_session = SimpleNamespace(
-        get_dom_element_by_index=AsyncMock(return_value=node),
-        event_bus=SimpleNamespace(dispatch=MagicMock(return_value=completed)),
-    )
+    page = MagicMock()
+    page.is_closed.return_value = False
+    locator = MagicMock()
+    locator.fill = AsyncMock()
+    page.locator.return_value = locator
     server = object.__new__(CustomBrowserUseServer)
-    server.browser_session = cast(Any, browser_session)
+    server._page = page
 
-    with patch(
-        "openhands.tools.browser_use.server.TypeTextEvent", return_value=type_event
-    ) as type_text_event:
-        result = await server._type_secret_text(2, SECRET_VALUE)
+    result = await server._type_secret_text(2, SECRET_VALUE)
 
-    dispatched = browser_session.event_bus.dispatch.call_args.args[0]
-    type_text_event.assert_called_once_with(
-        node=node,
-        text=SECRET_VALUE,
-        is_sensitive=True,
-        sensitive_key_name="secret",
-    )
-    assert dispatched is type_event
+    locator.fill.assert_awaited_once_with(SECRET_VALUE)
     assert result == "Typed <secret> into element 2"
 
 
@@ -408,54 +396,41 @@ class TestBrowserStateSaysWhereOnThePageItWasRead:
     """
 
     @staticmethod
-    def _server_at(scroll_y: int, page_height: int, base: str):
-        import types
-
+    def _server_at(scroll_y: int, page_height: int, base):
         from openhands.tools.browser_use.server import CustomBrowserUseServer
 
         server = CustomBrowserUseServer.__new__(CustomBrowserUseServer)
-        page_info = types.SimpleNamespace(
-            viewport_width=390,
-            viewport_height=844,
-            page_width=390,
-            page_height=page_height,
-            scroll_x=0,
-            scroll_y=scroll_y,
-        )
-        page = types.SimpleNamespace(
-            evaluate=lambda script: _coro({"items": [], "total": 0, "truncated": False})
-        )
-        server.browser_session = cast(
-            Any,
-            types.SimpleNamespace(
-                _cached_browser_state_summary=types.SimpleNamespace(
-                    page_info=page_info
-                ),
-                get_current_page=lambda: _coro(page),
-            ),
-        )
-
-        async def upstream(self, include_screenshot=False):
-            return base
-
-        CustomBrowserUseServer.__mro__[1]._get_browser_state = upstream
+        page = MagicMock()
+        page.is_closed.return_value = False
+        if isinstance(base, dict):
+            base.update(
+                {
+                    "viewport": {"width": 390, "height": 844},
+                    "page": {"width": 390, "height": page_height},
+                    "scroll": {"x": 0, "y": scroll_y},
+                    "pages_above": round(scroll_y / 844, 1),
+                    "pages_below": round(max(page_height - scroll_y - 844, 0) / 844, 1),
+                    "semantic_outline": {
+                        "items": [],
+                        "total": 0,
+                        "truncated": False,
+                    },
+                }
+            )
+        page.evaluate = AsyncMock(return_value=base)
+        server._page = page
         return CustomBrowserUseServer, server
 
     @staticmethod
     def _page(elements=()):
-        import json
-
-        return json.dumps(
-            {
-                "url": "https://preview.example/artist/3648",
-                "title": "Artist",
-                "tabs": [],
-                "interactive_elements": list(elements),
-            }
-        )
+        return {
+            "url": "https://preview.example/artist/3648",
+            "title": "Artist",
+            "tabs": [],
+            "interactive_elements": list(elements),
+        }
 
     def test_it_reports_how_many_screens_are_still_below(self):
-        import asyncio
         import json
 
         cls, server = self._server_at(844, 4220, self._page([{"index": 1}]))
@@ -471,7 +446,6 @@ class TestBrowserStateSaysWhereOnThePageItWasRead:
         assert state["interactive_elements"] == [{"index": 1}]
 
     def test_a_page_that_fits_reports_nothing_below(self):
-        import asyncio
         import json
 
         cls, server = self._server_at(0, 800, self._page())
@@ -482,14 +456,11 @@ class TestBrowserStateSaysWhereOnThePageItWasRead:
 
     def test_an_upstream_error_is_passed_through_unchanged(self):
         """It is not this method's job to rewrite "no session active"."""
-        import asyncio
 
         cls, server = self._server_at(0, 800, "Error: No browser session active")
 
-        assert (
+        with pytest.raises(RuntimeError, match="invalid"):
             asyncio.run(cls._get_browser_state(server, False))
-            == "Error: No browser session active"
-        )
 
 
 class TestScrollingToSomethingRatherThanTowardsIt:
@@ -505,26 +476,23 @@ class TestScrollingToSomethingRatherThanTowardsIt:
 
     @staticmethod
     def _server(evaluate_result):
-        import types
-
         from openhands.tools.browser_use.server import CustomBrowserUseServer
 
         seen: dict = {}
 
         class Page:
+            def is_closed(self):
+                return False
+
             async def evaluate(self, script, arg):
                 seen["script"], seen["arg"] = script, arg
                 return evaluate_result
 
         server = CustomBrowserUseServer.__new__(CustomBrowserUseServer)
-        server.browser_session = cast(
-            Any, types.SimpleNamespace(get_current_page=lambda: _coro(Page()))
-        )
+        server._page = cast(Any, Page())
         return CustomBrowserUseServer, server, seen
 
     def test_the_target_is_reached_in_one_call_and_centred(self):
-        import asyncio
-
         cls, server, seen = self._server("Noteworthy Insights")
 
         result = asyncio.run(cls._scroll_to_text(server, "Noteworthy"))
@@ -547,7 +515,6 @@ class TestScrollingToSomethingRatherThanTowardsIt:
         falls back to `textContent`, so the blob matched and -- being last in
         the wrapper both share -- won the walk.
         """
-        import asyncio
 
         cls, server, seen = self._server("Noteworthy Insights")
 
@@ -563,7 +530,6 @@ class TestScrollingToSomethingRatherThanTowardsIt:
 
     def test_not_finding_it_names_what_to_do_instead(self):
         """The run gets one turn on this text, so it has to carry the remedy."""
-        import asyncio
 
         cls, server, _ = self._server(None)
 

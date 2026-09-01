@@ -25,11 +25,15 @@ class _RecordingExecutor(BrowserToolExecutor):
 
     def __init__(self, results: list[BrowserObservation]) -> None:
         self.calls: list[object] = []
+        self.automatic_state_suppressed: list[bool] = []
         self._results = list(results)
         self.full_output_save_dir = None
 
     def __call__(self, action, conversation=None):  # type: ignore[override]
         self.calls.append(action)
+        self.automatic_state_suppressed.append(
+            getattr(self, "_sequence_suppresses_automatic_state", False)
+        )
         return self._results.pop(0)
 
 
@@ -154,3 +158,30 @@ def test_the_screenshot_is_the_state_the_sequence_ended_on() -> None:
     )
 
     assert result.screenshot_data == "BBB"
+
+
+def test_sequence_reads_one_final_state_instead_of_serializing_every_step() -> None:
+    executor = _RecordingExecutor(
+        [_ok("navigated"), _ok("clicked"), _ok("final state", screenshot="END")]
+    )
+
+    result = executor._run_sequence(
+        BrowserSequenceAction(
+            steps=[
+                BrowserSequenceStep(
+                    action="navigate", arguments={"url": "https://example.com"}
+                ),
+                BrowserSequenceStep(action="click", arguments={"index": 2}),
+            ]
+        ),
+        None,
+    )
+
+    assert [type(action).__name__ for action in executor.calls] == [
+        "BrowserNavigateAction",
+        "BrowserClickAction",
+        "BrowserGetStateAction",
+    ]
+    assert executor.automatic_state_suppressed == [True, True, False]
+    assert result.screenshot_data == "END"
+    assert "final state" in result.text

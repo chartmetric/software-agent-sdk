@@ -1,4 +1,4 @@
-"""Browser tools using browser-use integration."""
+"""Browser tools using a persistent Playwright Chromium session."""
 
 from openhands.tools.browser_use.definition import (
     BrowserClickAction,

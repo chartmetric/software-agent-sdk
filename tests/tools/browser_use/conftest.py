@@ -13,7 +13,12 @@ from openhands.tools.browser_use.impl import BrowserToolExecutor
 def mock_browser_server():
     """Create a mock CustomBrowserUseServer."""
     server = MagicMock()
-    server._init_browser_session = AsyncMock()
+
+    async def start(**_config):
+        server.is_live = True
+
+    server.is_live = False
+    server._init_browser_session = AsyncMock(side_effect=start)
     server._inject_scripts_to_session = AsyncMock()
     server._close_all_sessions = AsyncMock()
     return server

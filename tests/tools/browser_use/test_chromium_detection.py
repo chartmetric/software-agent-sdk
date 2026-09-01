@@ -1,12 +1,14 @@
 """Tests for Chromium detection and installation functionality."""
 
-import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from openhands.tools.browser_use.impl import BrowserToolExecutor, _install_chromium
+from openhands.tools.browser_use.impl import (
+    BrowserToolExecutor,
+    _playwright_cache_dirs,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +30,29 @@ class TestChromiumDetection:
         ):
             result = executor.check_chromium_available()
             assert result == "/usr/bin/chromium"
+
+    def test_pinned_image_browser_path_wins_over_user_cache(self, monkeypatch):
+        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "/opt/playwright-browsers")
+
+        assert _playwright_cache_dirs("linux")[0] == Path("/opt/playwright-browsers")
+
+    def test_playwright_browser_wins_over_a_system_chromium(self, monkeypatch):
+        executor = BrowserToolExecutor.__new__(BrowserToolExecutor)
+        cache = Path("/opt/playwright-browsers")
+        chromium_dir = cache / "chromium-1234"
+        bundled = chromium_dir / "chrome-linux64" / "chrome"
+        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(cache))
+
+        def exists(path):
+            return str(path) in {str(cache), str(bundled), "/usr/bin/chromium"}
+
+        with (
+            patch("openhands.tools.browser_use.impl.sys.platform", "linux"),
+            patch.object(Path, "exists", exists),
+            patch.object(Path, "glob", return_value=[chromium_dir]),
+            patch("shutil.which", return_value="/usr/bin/chromium"),
+        ):
+            assert executor.check_chromium_available() == str(bundled)
 
     def test_check_chromium_available_is_cached(self):
         """Test that Chromium detection is memoized across repeated calls."""
@@ -239,68 +264,6 @@ class TestChromiumDetection:
             assert result is None
 
 
-class TestChromiumInstallation:
-    """Test Chromium installation functionality."""
-
-    def test_install_chromium_success(self):
-        """Test successful Chromium installation."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-
-        with (
-            patch("shutil.which", return_value="/usr/bin/uvx"),
-            patch("subprocess.run", return_value=mock_result),
-        ):
-            result = _install_chromium()
-            assert result is True
-
-    def test_install_chromium_uvx_not_found(self):
-        """Test Chromium installation when uvx is not available."""
-        with patch("shutil.which", return_value=None):
-            result = _install_chromium()
-            assert result is False
-
-    def test_install_chromium_subprocess_failure(self):
-        """Test Chromium installation when subprocess fails."""
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stderr = "Installation failed"
-
-        with (
-            patch("shutil.which", return_value="/usr/bin/uvx"),
-            patch("subprocess.run", return_value=mock_result),
-        ):
-            result = _install_chromium()
-            assert result is False
-
-    def test_install_chromium_timeout(self):
-        """Test Chromium installation timeout."""
-        with (
-            patch("shutil.which", return_value="/usr/bin/uvx"),
-            patch("subprocess.run", side_effect=subprocess.TimeoutExpired("uvx", 300)),
-        ):
-            result = _install_chromium()
-            assert result is False
-
-    def test_install_chromium_file_not_found(self):
-        """Test Chromium installation when uvx command is not found."""
-        with (
-            patch("shutil.which", return_value="/usr/bin/uvx"),
-            patch("subprocess.run", side_effect=FileNotFoundError("uvx not found")),
-        ):
-            result = _install_chromium()
-            assert result is False
-
-    def test_install_chromium_generic_exception(self):
-        """Test Chromium installation with generic exception."""
-        with (
-            patch("shutil.which", return_value="/usr/bin/uvx"),
-            patch("subprocess.run", side_effect=Exception("Generic error")),
-        ):
-            result = _install_chromium()
-            assert result is False
-
-
 class TestEnsureChromiumAvailable:
     """Test ensure Chromium available functionality."""
 
@@ -322,8 +285,7 @@ class TestEnsureChromiumAvailable:
 
             error_message = str(exc_info.value)
             assert "Chromium is required for browser operations" in error_message
-            assert "uvx playwright install chromium" in error_message
-            assert "pip install playwright" in error_message
+            assert "python -m playwright install chromium" in error_message
             assert "sudo apt install chromium-browser" in error_message
             assert "brew install chromium" in error_message
             assert "winget install Chromium.Chromium" in error_message
