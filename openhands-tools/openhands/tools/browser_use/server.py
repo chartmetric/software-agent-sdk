@@ -248,9 +248,7 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
                 "assigned by the framework at render time is not on the page "
                 "before that section renders."
             )
-        arrived = (
-            f"Scrolled to #{element_id} (<{found['tag']}> at y={found['y']})"
-        )
+        arrived = f"Scrolled to #{element_id} (<{found['tag']}> at y={found['y']})"
         shown = str(found.get("text") or "")
         if not shown:
             # Arriving is the point even when nothing is in it yet: this call is

@@ -142,7 +142,6 @@ def _wait_for_test_server(
     raise RuntimeError(f"Test HTTP server did not start within {timeout_seconds}s")
 
 
-
 # A section that renders only when it is scrolled into view. The container's id
 # is in the markup from the first paint; nothing inside it is. This is what
 # `to_id` is for and what `to_text` cannot reach -- the text arrives only after
@@ -166,6 +165,7 @@ DEFERRED_HTML = """<!doctype html>
 </body></html>
 """
 
+
 @pytest.fixture(scope="module")
 def test_server() -> Generator[str]:
     """Set up a local HTTP server for testing."""
@@ -180,9 +180,7 @@ def test_server() -> Generator[str]:
         with open(os.path.join(temp_dir, "page2.html"), "w", encoding="utf-8") as f:
             f.write(PAGE2_HTML)
 
-        with open(
-            os.path.join(temp_dir, "deferred.html"), "w", encoding="utf-8"
-        ) as f:
+        with open(os.path.join(temp_dir, "deferred.html"), "w", encoding="utf-8") as f:
             f.write(DEFERRED_HTML)
 
         # Start HTTP server
@@ -429,7 +427,6 @@ class TestBrowserExecutorE2E:
         assert isinstance(result, BrowserObservation)
         assert not result.is_error
 
-
     def test_scroll_to_id_reaches_a_section_that_has_not_rendered(
         self, browser_executor: BrowserToolExecutor, test_server: str
     ):
@@ -445,9 +442,7 @@ class TestBrowserExecutorE2E:
         present, working section as absent, and another reached it only after
         eight blind screens. `to_id` is one call.
         """
-        browser_executor(
-            BrowserNavigateAction(url=f"{test_server}/deferred.html")
-        )
+        browser_executor(BrowserNavigateAction(url=f"{test_server}/deferred.html"))
 
         # The precondition: the text genuinely is not there to be found.
         missed = browser_executor(BrowserScrollAction(to_text="Deferred Heading"))
@@ -474,7 +469,6 @@ class TestBrowserExecutorE2E:
         assert not result.is_error
         assert "no-such-container" in str(result)
 
-
     def test_screenshot_id_frames_the_capture_on_the_element(
         self, browser_executor: BrowserToolExecutor, test_server: str
     ):
@@ -497,14 +491,10 @@ class TestBrowserExecutorE2E:
                 return None
             return int.from_bytes(raw[20:24], "big")
 
-        browser_executor(
-            BrowserNavigateAction(url=f"{test_server}/deferred.html")
-        )
+        browser_executor(BrowserNavigateAction(url=f"{test_server}/deferred.html"))
         browser_executor(BrowserScrollAction(to_id="deferred-section"))
 
-        viewport = browser_executor(
-            BrowserGetStateAction(include_screenshot=True)
-        )
+        viewport = browser_executor(BrowserGetStateAction(include_screenshot=True))
         scoped = browser_executor(
             BrowserGetStateAction(
                 include_screenshot=True, screenshot_id="deferred-section"
@@ -1104,9 +1094,7 @@ class TestSemanticOutlineDeferredSection:
         its id, was the one thing the page state did not report, and `to_id`
         had nothing to be given.
         """
-        browser_executor(
-            BrowserNavigateAction(url=f"{test_server}/deferred.html")
-        )
+        browser_executor(BrowserNavigateAction(url=f"{test_server}/deferred.html"))
 
         state = browser_executor(BrowserGetStateAction(include_screenshot=False))
         text = " ".join(
