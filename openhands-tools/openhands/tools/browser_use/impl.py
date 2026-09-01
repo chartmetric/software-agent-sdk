@@ -715,6 +715,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             BrowserClickAction,
             BrowserCloseTabAction,
             BrowserFillFormAction,
+            BrowserFindAction,
             BrowserGetContentAction,
             BrowserGetStateAction,
             BrowserGetStorageAction,
@@ -741,6 +742,7 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             BrowserClickAction,
             BrowserTypeAction,
             BrowserScrollAction,
+            BrowserSetViewportAction,
             BrowserGoBackAction,
             BrowserSwitchTabAction,
             BrowserCloseTabAction,
@@ -788,6 +790,8 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                 result = await self.get_content(
                     action.extract_links, action.start_from_char
                 )
+            elif isinstance(action, BrowserFindAction):
+                result = await self.find_visible_text(action.text, action.max_results)
             elif isinstance(action, BrowserScrollAction):
                 result = await self.scroll(action.direction, action.to_text)
             elif isinstance(action, BrowserSetViewportAction):
@@ -1013,6 +1017,11 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         if to_text:
             return await self._server._scroll_to_text(to_text)
         return await self._server._scroll(direction)
+
+    async def find_visible_text(self, text: str, max_results: int = 10) -> str:
+        """Locate rendered visible text without moving the page."""
+        await self._ensure_initialized()
+        return await self._server._find_visible_text(text, max_results)
 
     async def set_viewport(self, width: int, height: int) -> str:
         """Re-render the open page at another viewport size."""

@@ -139,6 +139,15 @@ def test_browser_section_guarded_on_enable_browser() -> None:
     assert BrowserSection().guard(_ctx()) is False
 
 
+def test_browser_section_requires_semantic_orientation_for_ui_claims() -> None:
+    section = BrowserSection().render(_ctx(enable_browser=True)) or ""
+
+    assert "semantic_outline" in section
+    assert "browser_find" in section
+    assert "Try curl/wget/fetch first" not in section
+    assert "Max 10 browser actions" not in section
+
+
 def test_security_section_guarded_on_policy_filename() -> None:
     assert SecuritySection().guard(_ctx(security_policy_filename="security_policy.j2"))
     assert not SecuritySection().guard(_ctx(security_policy_filename=""))

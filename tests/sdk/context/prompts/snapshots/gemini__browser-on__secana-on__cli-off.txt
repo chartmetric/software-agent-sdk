@@ -152,11 +152,13 @@ When an action originates from or is influenced by repository-provided context (
 
 <BROWSER_TOOLS>
 You have a browser for navigating pages and interacting with web UIs.
-* Try curl/wget/fetch first. Use the browser only when simpler tools fail or the page requires JS/interaction.
-* ALWAYS call `browser_get_state` before EVERY `browser_click` or `browser_type` — indices change after each action. Flow: navigate → get_state → interact → get_state → get_content.
-* Max 10 browser actions per sub-task. If stuck, switch approach entirely.
-* If 20+ total steps without converging, stop exploring and commit to your best answer.
-* On 403/CAPTCHA/login wall: try one alternative, then abandon the browser.
+* Claims about a rendered or interactive UI require the browser. Source and HTTP reads can explain implementation or transport, but they do not show what a user sees.
+* Orient before acting: read `browser_get_state`, including `semantic_outline`, scroll position and `pages_below`; use `browser_find` or `browser_get_content` for visible non-interactive text.
+* A state-changing browser tool returns the state it produced. Read that result instead of immediately repeating `browser_get_state`.
+* Indices change after page-changing actions. Use only indices from the latest returned state.
+* Before concluding that a section or control is absent, account for the whole document and deferred rendering: search visible text, inspect the semantic outline, and walk remaining screens when content mounts lazily.
+* Do not repeat a search or scroll that produced no new information. After distinct alternatives also fail, report the observed blocker instead of looping.
+* On 403/CAPTCHA/login wall, use only credentials and alternatives explicitly available in the task context; otherwise report the observed blocker rather than guessing past it.
 * Do NOT submit forms or create accounts unless explicitly asked.
 </BROWSER_TOOLS>
 

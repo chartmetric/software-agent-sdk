@@ -422,8 +422,17 @@ class TestBrowserStateSaysWhereOnThePageItWasRead:
             scroll_x=0,
             scroll_y=scroll_y,
         )
-        server.browser_session = types.SimpleNamespace(
-            _cached_browser_state_summary=types.SimpleNamespace(page_info=page_info)
+        page = types.SimpleNamespace(
+            evaluate=lambda script: _coro({"items": [], "total": 0, "truncated": False})
+        )
+        server.browser_session = cast(
+            Any,
+            types.SimpleNamespace(
+                _cached_browser_state_summary=types.SimpleNamespace(
+                    page_info=page_info
+                ),
+                get_current_page=lambda: _coro(page),
+            ),
         )
 
         async def upstream(self, include_screenshot=False):
@@ -508,8 +517,8 @@ class TestScrollingToSomethingRatherThanTowardsIt:
                 return evaluate_result
 
         server = CustomBrowserUseServer.__new__(CustomBrowserUseServer)
-        server.browser_session = types.SimpleNamespace(
-            get_current_page=lambda: _coro(Page())
+        server.browser_session = cast(
+            Any, types.SimpleNamespace(get_current_page=lambda: _coro(Page()))
         )
         return CustomBrowserUseServer, server, seen
 

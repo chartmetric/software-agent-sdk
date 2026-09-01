@@ -8,6 +8,10 @@ from openhands.sdk import get_logger
 from openhands.tools.browser_use.logging_fix import LogSafeBrowserUseServer
 from openhands.tools.browser_use.recording import RecordingSession
 from openhands.tools.browser_use.screencast import ScreencastSession
+from openhands.tools.browser_use.semantic import (
+    FIND_VISIBLE_TEXT_SCRIPT,
+    SEMANTIC_OUTLINE_SCRIPT,
+)
 
 
 logger = get_logger(__name__)
@@ -171,6 +175,25 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
                 "read browser_get_content to see what this page does show."
             )
         return f"Scrolled to {found!r}"
+
+    async def _find_visible_text(self, text: str, max_results: int) -> str:
+        """Locate rendered text without changing the page's scroll position."""
+        import json
+
+        if not self.browser_session:
+            return "Error: No browser session active"
+
+        page = await self.browser_session.get_current_page()
+        if page is None:
+            return "Error: No page is open to search"
+
+        result = await page.evaluate(
+            FIND_VISIBLE_TEXT_SCRIPT,
+            {"needle": text, "limit": max_results},
+        )
+        if isinstance(result, str):
+            result = json.loads(result)
+        return json.dumps(result, indent=2)
 
     async def _set_viewport(self, width: int, height: int) -> str:
         """Render the page already open at another width.
@@ -367,10 +390,25 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
             # An error string rather than a state document. Upstream returns one
             # when there is no session, and it is not this method's to rewrite.
             return state_json
-        if not isinstance(state, dict) or "scroll" in state:
+        if not isinstance(state, dict):
             return state_json
 
         session = self.browser_session
+        if session is None:
+            return state_json
+        page = await session.get_current_page()
+        if page is not None:
+            try:
+                outline = await page.evaluate(SEMANTIC_OUTLINE_SCRIPT)
+                if isinstance(outline, str):
+                    outline = json.loads(outline)
+                state["semantic_outline"] = outline
+            except Exception as exc:
+                logger.warning("Could not read browser semantic outline: %s", exc)
+
+        if "scroll" in state:
+            return json.dumps(state, indent=2)
+
         page_info = getattr(
             getattr(session, "_cached_browser_state_summary", None), "page_info", None
         )
