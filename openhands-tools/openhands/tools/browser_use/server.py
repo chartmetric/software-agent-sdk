@@ -262,6 +262,89 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
             )
         return f"{arrived}: {shown!r}"
 
+    async def _screenshot_element(self, element_id: str) -> str | None:
+        """A PNG of the element carrying ``element_id``, base64, or None.
+
+        A viewport screenshot is a picture of wherever the page happens to be
+        sitting. That is the right frame for "what does this screen look like",
+        and the wrong one for "does this section render", which is what a run
+        publishing evidence is almost always asked. The difference shows up as
+        captures that are mostly the surrounding page with the surface at an
+        edge, or scrolled just out of frame -- and a reviewer cannot tell that
+        from the surface being broken.
+
+        Taken through CDP rather than a Playwright element handle, because the
+        `Page` here is browser_use's own CDP wrapper and has no
+        `query_selector`. `Page.captureScreenshot` with a clip is what
+        browser_use itself uses, and the same idiom already appears in this
+        file.
+
+        None when nothing carries the id or the element has no box to
+        photograph, so the caller falls back to the viewport rather than being
+        handed a blank.
+        """
+        if not self.browser_session:
+            return None
+
+        page = await self.browser_session.get_current_page()
+        if page is None:
+            return None
+
+        # Scroll it into view and measure it in *page* coordinates, which is
+        # what a clip is expressed in. Scrolling first is not only about the
+        # clip: a section that mounts on becoming visible has nothing to
+        # photograph until it has been.
+        box = await page.evaluate(
+            """(wanted) => {
+                const el = document.getElementById(wanted);
+                if (!el) return null;
+                el.scrollIntoView({block: 'center', inline: 'nearest'});
+                const r = el.getBoundingClientRect();
+                if (r.width < 1 || r.height < 1) return null;
+                return {
+                    x: r.left + window.scrollX,
+                    y: r.top + window.scrollY,
+                    width: r.width,
+                    height: r.height,
+                };
+            }""",
+            element_id,
+        )
+        if isinstance(box, str):
+            import json
+
+            try:
+                box = json.loads(box)
+            except ValueError:
+                box = None
+        if not isinstance(box, dict):
+            return None
+
+        try:
+            cdp_session = await self.browser_session.get_or_create_cdp_session()
+            result = await cdp_session.cdp_client.send.Page.captureScreenshot(
+                params={
+                    "format": "png",
+                    "clip": {
+                        "x": float(box["x"]),
+                        "y": float(box["y"]),
+                        "width": float(box["width"]),
+                        "height": float(box["height"]),
+                        "scale": 1,
+                    },
+                    # The clip is in page coordinates, so a section taller than
+                    # the window is still captured whole rather than cut at the
+                    # viewport's edge.
+                    "captureBeyondViewport": True,
+                },
+                session_id=cdp_session.session_id,
+            )
+        except Exception as exc:
+            logger.warning("Could not screenshot element %r: %s", element_id, exc)
+            return None
+        data = result.get("data") if isinstance(result, dict) else None
+        return data if isinstance(data, str) and data else None
+
     async def _find_visible_text(self, text: str, max_results: int) -> str:
         """Locate rendered text without changing the page's scroll position."""
         import json

@@ -548,6 +548,16 @@ class BrowserGetStateAction(BrowserAction):
         default=True,
         description="Whether to include a screenshot of the current page. Default: True",  # noqa: E501
     )
+    screenshot_id: str | None = Field(
+        default=None,
+        description=(
+            "The `id` of an element to frame the screenshot on, instead of the "
+            "viewport. Use it when the picture is evidence about one surface: "
+            "the capture is then of that surface rather than of wherever the "
+            "page happened to be scrolled to. Falls back to the viewport if "
+            "nothing carries the id."
+        ),
+    )
 
 
 BROWSER_GET_STATE_DESCRIPTION = """Get the page's interactive elements and where on the page you are reading them.
@@ -576,6 +586,10 @@ ways an absence gets called wrongly:
 
 Parameters:
 - include_screenshot: Whether to include a screenshot (optional, default: True).
+- screenshot_id: Id of an element to frame the screenshot on rather than the
+  viewport (optional). Prefer it when the picture is evidence about one
+  surface -- a viewport shot is a picture of wherever the page is sitting, and
+  a reviewer cannot tell a surface at the edge of the frame from a broken one.
   Pass false only for a read whose answer is entirely in the text and that you
   will not report on. Spacing, clipping, overlap and alignment exist only in the
   picture, and a state read without one leaves nothing to publish afterwards.

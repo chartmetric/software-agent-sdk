@@ -781,7 +781,10 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                     runtime_secret_values or {},
                 )
             elif isinstance(action, BrowserGetStateAction):
-                return await self.get_state(action.include_screenshot)
+                return await self.get_state(
+                    action.include_screenshot,
+                    getattr(action, "screenshot_id", None),
+                )
             elif isinstance(action, BrowserGetStorageAction):
                 result = await self.get_storage()
             elif isinstance(action, BrowserSetStorageAction):
@@ -1043,13 +1046,17 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
         return await self._server._set_viewport(width, height)
 
     async def _browser_state_payload(
-        self, include_screenshot: bool
+        self, include_screenshot: bool, screenshot_id: str | None = None
     ) -> tuple[str, object | None]:
         """The page state as text, and its screenshot if one was asked for.
 
         Shared by `get_state` and by every action that returns the state it
         produced, so the two cannot drift into describing the same page
         differently.
+
+        `screenshot_id` narrows the picture to one element. The state text is
+        unchanged either way -- it describes the page, and a caller framing a
+        capture on a section still wants to know what page it is on.
         """
         await self._ensure_initialized()
         result_json = await self._server._get_browser_state(include_screenshot)
@@ -1057,17 +1064,29 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             try:
                 result_data = json.loads(result_json)
                 screenshot_data = result_data.pop("screenshot", None)
+                if screenshot_id:
+                    scoped = await self._server._screenshot_element(screenshot_id)
+                    # Fall back to the viewport rather than returning nothing: a
+                    # caller that named an id which is not on the page is better
+                    # served by a picture plus a state it can read than by a
+                    # blank, and the state says what is there.
+                    if scoped is not None:
+                        screenshot_data = scoped
                 return json.dumps(result_data, indent=2), screenshot_data
             except json.JSONDecodeError:
                 # Unparseable state is still state; return it as it came.
                 pass
         return result_json, None
 
-    async def get_state(self, include_screenshot: bool = False):
+    async def get_state(
+        self, include_screenshot: bool = False, screenshot_id: str | None = None
+    ):
         """Get current browser state with interactive elements."""
         from openhands.tools.browser_use.definition import BrowserObservation
 
-        text, screenshot_data = await self._browser_state_payload(include_screenshot)
+        text, screenshot_data = await self._browser_state_payload(
+            include_screenshot, screenshot_id
+        )
         return BrowserObservation.from_text(
             text=text,
             is_error=False,

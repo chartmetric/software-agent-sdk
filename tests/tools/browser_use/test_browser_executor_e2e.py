@@ -474,6 +474,67 @@ class TestBrowserExecutorE2E:
         assert not result.is_error
         assert "no-such-container" in str(result)
 
+
+    def test_screenshot_id_frames_the_capture_on_the_element(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        """A viewport shot is a picture of wherever the page is sitting.
+
+        For evidence about one surface that is the wrong frame: the surface can
+        be at the edge, or just out of it, and a reviewer cannot tell that from
+        the surface being broken. Compared by image height rather than by the
+        call succeeding, because "it returned a screenshot" is true of the
+        unscoped path too.
+        """
+        import base64
+
+        def height(observation) -> int | None:
+            data = observation.screenshot_data
+            if not data:
+                return None
+            raw = base64.b64decode(data)
+            if raw[:8] != b"\x89PNG\r\n\x1a\n":
+                return None
+            return int.from_bytes(raw[20:24], "big")
+
+        browser_executor(
+            BrowserNavigateAction(url=f"{test_server}/deferred.html")
+        )
+        browser_executor(BrowserScrollAction(to_id="deferred-section"))
+
+        viewport = browser_executor(
+            BrowserGetStateAction(include_screenshot=True)
+        )
+        scoped = browser_executor(
+            BrowserGetStateAction(
+                include_screenshot=True, screenshot_id="deferred-section"
+            )
+        )
+
+        assert not scoped.is_error
+        assert height(viewport) is not None
+        assert height(scoped) is not None
+        assert height(scoped) < height(viewport)
+
+    def test_an_unknown_screenshot_id_falls_back_to_the_viewport(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        """A picture plus a readable state beats a blank.
+
+        The caller named an id that is not on the page; the state says what is,
+        and the viewport shot is still worth having while they work that out.
+        """
+        browser_executor(BrowserNavigateAction(url=test_server))
+
+        result = browser_executor(
+            BrowserGetStateAction(
+                include_screenshot=True, screenshot_id="no-such-container"
+            )
+        )
+
+        assert not result.is_error
+        assert result.screenshot_data
+
     def test_get_content_action(
         self, browser_executor: BrowserToolExecutor, test_server: str
     ):
