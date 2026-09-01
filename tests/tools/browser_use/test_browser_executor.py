@@ -246,7 +246,26 @@ async def test_browser_executor_action_routing_get_state(
     action = BrowserGetStateAction(include_screenshot=True)
     result = await mock_browser_executor._execute_action(action)
 
-    mock_get_state.assert_called_once_with(True)
+    # The frame the picture is taken on travels with the request: `None` is the
+    # viewport, an id narrows it to that element.
+    mock_get_state.assert_called_once_with(True, None)
+    assert result is expected_observation
+
+
+@patch("openhands.tools.browser_use.impl.BrowserToolExecutor.get_state")
+async def test_browser_executor_action_routing_get_state_with_element_frame(
+    mock_get_state, mock_browser_executor
+):
+    """A capture asked for on one element reaches `get_state` as that element."""
+    expected_observation = BrowserObservation.from_text(text="State retrieved")
+    mock_get_state.return_value = expected_observation
+
+    action = BrowserGetStateAction(
+        include_screenshot=True, screenshot_id="noteworthy-insights"
+    )
+    result = await mock_browser_executor._execute_action(action)
+
+    mock_get_state.assert_called_once_with(True, "noteworthy-insights")
     assert result is expected_observation
 
 

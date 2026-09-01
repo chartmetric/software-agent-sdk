@@ -501,10 +501,15 @@ class TestBrowserExecutorE2E:
             )
         )
 
+        viewport_height = height(viewport)
+        scoped_height = height(scoped)
+
         assert not scoped.is_error
-        assert height(viewport) is not None
-        assert height(scoped) is not None
-        assert height(scoped) < height(viewport)
+        assert viewport_height is not None
+        assert scoped_height is not None
+        # The element is shorter than the window it sits in, which is the whole
+        # point: the frame moved off the viewport and onto the surface.
+        assert scoped_height < viewport_height
 
     def test_an_unknown_screenshot_id_falls_back_to_the_viewport(
         self, browser_executor: BrowserToolExecutor, test_server: str
