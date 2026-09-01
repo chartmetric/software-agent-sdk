@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-25T16:25:21.329916Z"
+exclude-newer = "2026-08-25T18:11:37.793466Z"
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
@@ -38,6 +38,7 @@ dev = [
     { name = "griffe", extras = ["pypi"], specifier = ">=2.0.0" },
     { name = "packaging", specifier = ">=24.2" },
     { name = "pillow", specifier = ">=12.1.1" },
+    { name = "posthog", specifier = ">=6,<7" },
     { name = "pre-commit", specifier = ">=4.3.0" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pycodestyle", specifier = ">=2.12.0" },
