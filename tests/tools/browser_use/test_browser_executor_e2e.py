@@ -142,6 +142,30 @@ def _wait_for_test_server(
     raise RuntimeError(f"Test HTTP server did not start within {timeout_seconds}s")
 
 
+
+# A section that renders only when it is scrolled into view. The container's id
+# is in the markup from the first paint; nothing inside it is. This is what
+# `to_id` is for and what `to_text` cannot reach -- the text arrives only after
+# the arrival, so searching for it can never be what gets you there.
+DEFERRED_HTML = """<!doctype html>
+<html><head><title>Deferred</title></head>
+<body style="margin:0">
+  <div style="height:2400px">above</div>
+  <section id="deferred-section"></section>
+  <div style="height:1200px">below</div>
+  <script>
+    const target = document.getElementById('deferred-section');
+    new IntersectionObserver((entries, observer) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        observer.disconnect();
+        target.innerHTML = '<h2>Deferred Heading</h2>';
+      }
+    }).observe(target);
+  </script>
+</body></html>
+"""
+
 @pytest.fixture(scope="module")
 def test_server() -> Generator[str]:
     """Set up a local HTTP server for testing."""
@@ -155,6 +179,11 @@ def test_server() -> Generator[str]:
 
         with open(os.path.join(temp_dir, "page2.html"), "w", encoding="utf-8") as f:
             f.write(PAGE2_HTML)
+
+        with open(
+            os.path.join(temp_dir, "deferred.html"), "w", encoding="utf-8"
+        ) as f:
+            f.write(DEFERRED_HTML)
 
         # Start HTTP server
         port = _get_free_port()
@@ -399,6 +428,51 @@ class TestBrowserExecutorE2E:
 
         assert isinstance(result, BrowserObservation)
         assert not result.is_error
+
+
+    def test_scroll_to_id_reaches_a_section_that_has_not_rendered(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        """`to_text` cannot reach a section whose text does not exist yet.
+
+        A deferred container is empty until something brings it into view, so
+        its heading is not in the document to be matched -- the words arrive
+        only after the arrival. Scrolling for them therefore fails identically
+        whether the section is there or not.
+
+        Measured on two Chartmetric Pilot runs of one request (2026-09-01): with
+        only a text target, one agent scrolled ten screens and reported a
+        present, working section as absent, and another reached it only after
+        eight blind screens. `to_id` is one call.
+        """
+        browser_executor(
+            BrowserNavigateAction(url=f"{test_server}/deferred.html")
+        )
+
+        # The precondition: the text genuinely is not there to be found.
+        missed = browser_executor(BrowserScrollAction(to_text="Deferred Heading"))
+        assert not missed.is_error
+        assert "No element on the page shows" in str(missed)
+
+        arrived = browser_executor(BrowserScrollAction(to_id="deferred-section"))
+        assert not arrived.is_error
+        assert "#deferred-section" in str(arrived)
+
+        # And arriving is what mounted it, so the text is reachable now.
+        found = browser_executor(BrowserScrollAction(to_text="Deferred Heading"))
+        assert not found.is_error
+        assert "Scrolled to" in str(found)
+
+    def test_scroll_to_a_missing_id_says_so_rather_than_scrolling_anywhere(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        """An id nothing carries is an answer, not a reason to keep going."""
+        browser_executor(BrowserNavigateAction(url=test_server))
+
+        result = browser_executor(BrowserScrollAction(to_id="no-such-container"))
+
+        assert not result.is_error
+        assert "no-such-container" in str(result)
 
     def test_get_content_action(
         self, browser_executor: BrowserToolExecutor, test_server: str

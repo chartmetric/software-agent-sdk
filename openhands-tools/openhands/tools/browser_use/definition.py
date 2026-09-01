@@ -728,6 +728,15 @@ class BrowserScrollAction(BrowserAction):
             "is and scrolled straight to it, and `direction` is ignored."
         ),
     )
+    to_id: str | None = Field(
+        default=None,
+        description=(
+            "The `id` on the element's container. Use it for a section that "
+            "renders only once scrolled to: its text does not exist yet, so "
+            "`to_text` cannot reach it, while the id is there from the first "
+            "paint. Wins over `to_text` and `direction` when given."
+        ),
+    )
 
 
 BROWSER_SCROLL_DESCRIPTION = """Scroll the page, by a screen or straight to something.
@@ -739,16 +748,23 @@ loaded. Prefer it whenever you know what you are looking for. `direction` moves
 and on a page that grows as it loads the new content can arrive faster than that
 clears it.
 
+Pass `to_id` for a section that only renders once it is scrolled to. Its text
+does not exist yet, so no amount of scrolling will let `to_text` find it -- the
+words arrive after the arrival. The container's `id` is on the page from the
+first paint, and arriving is what makes the section mount.
+
 Use `direction` to survey a page you have no target on yet; `pages_below` from
 browser_get_state says how much is left.
 
 Not finding the text is an answer worth reading rather than a reason to keep
 scrolling: it may not have loaded, it may be behind a tab or an expander that
-has to be opened first, or this may not be the page that renders it.
+has to be opened first, or this may not be the page that renders it. If you know
+the container's id, that case is what `to_id` is for.
 
 Parameters:
+- to_id: Id of the container to scroll to (optional; wins over the other two)
 - to_text: Text of the element to scroll to (optional)
-- direction: "up" or "down", used when no `to_text` is given (optional, default: "down")
+- direction: "up" or "down", used when neither target is given (optional, default: "down")
 
 Returns the resulting page state, so a following browser_get_state call is
 redundant: read the state in this tool's own result.

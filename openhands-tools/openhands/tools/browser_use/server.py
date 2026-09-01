@@ -176,6 +176,92 @@ class CustomBrowserUseServer(LogSafeBrowserUseServer):
             )
         return f"Scrolled to {found!r}"
 
+    async def _scroll_to_id(self, element_id: str) -> str:
+        """Put the element carrying ``element_id`` in view.
+
+        `_scroll_to_text` covers the case where a run knows the words on the
+        thing it wants. A deferred section is the case where it cannot: the
+        container is an empty placeholder until something brings it into view,
+        its heading lives inside the part that has not rendered, and so no text
+        on the page names it yet. Searching for that text can never find it,
+        however far the page is scrolled, because the text arrives only after
+        the arrival.
+
+        The id is the one handle that is there from the first paint. It is also
+        not a guess in the way a CSS selector would be: a run reads the
+        component that renders the section before it edits, so the id is
+        something it was told rather than something it derived from a structure
+        it may have misread. That is why this takes an id and not a selector.
+
+        Measured on Chartmetric Pilot conversations 0091956501 and 653fafd8
+        (2026-09-01), both asked to fix an empty "Noteworthy Insights" section:
+        with only a text target, one run scrolled ten screens and reported a
+        present, working section as absent, and the other reached it only after
+        eight blind screens. The section's container had carried an id the
+        whole time.
+        """
+        if not self.browser_session:
+            return "Error: No browser session active"
+
+        page = await self.browser_session.get_current_page()
+        if page is None:
+            return "Error: No page is open to scroll"
+
+        found = await page.evaluate(
+            """(wanted) => {
+                // `getElementById` rather than a selector, so a value with a
+                // dot or a colon in it -- which CSS would read as a class or a
+                // pseudo-element -- is still looked up as the id it is.
+                const el = document.getElementById(wanted);
+                if (!el) return null;
+                el.scrollIntoView({block: 'center', inline: 'nearest'});
+                // What is there *now*. A deferred container is empty until this
+                // call brings it into view, so the caller is told it arrived
+                // rather than being handed the placeholder's blank text and
+                // left to read that as an empty page.
+                const rect = el.getBoundingClientRect();
+                return {
+                    tag: el.tagName.toLowerCase(),
+                    text: (el.innerText || '').trim().slice(0, 120),
+                    y: Math.round(rect.top + window.scrollY),
+                };
+            }""",
+            element_id,
+        )
+        # `page.evaluate` hands a structured result back as a JSON string here,
+        # the way `_find_visible_text` already has to allow for. Reading it as a
+        # dict without that check raised "string indices must be integers" --
+        # after the scroll had already happened, so the section mounted and the
+        # caller was told the call failed.
+        if isinstance(found, str):
+            import json
+
+            try:
+                found = json.loads(found)
+            except ValueError:
+                found = None
+        if not isinstance(found, dict):
+            return (
+                f"No element on the page has the id {element_id!r}. Check the "
+                "id against the component that renders the section, or scroll "
+                "down a screen at a time to reach it -- and note that an id "
+                "assigned by the framework at render time is not on the page "
+                "before that section renders."
+            )
+        arrived = (
+            f"Scrolled to #{element_id} (<{found['tag']}> at y={found['y']})"
+        )
+        shown = str(found.get("text") or "")
+        if not shown:
+            # Arriving is the point even when nothing is in it yet: this call is
+            # what makes a deferred section mount, so an empty container here is
+            # a "look again", not a failure.
+            return (
+                f"{arrived}. It is empty right now -- if it renders on becoming "
+                "visible, read the state again to see what it filled with."
+            )
+        return f"{arrived}: {shown!r}"
+
     async def _find_visible_text(self, text: str, max_results: int) -> str:
         """Locate rendered text without changing the page's scroll position."""
         import json

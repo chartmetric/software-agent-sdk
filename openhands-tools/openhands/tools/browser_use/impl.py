@@ -793,7 +793,9 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             elif isinstance(action, BrowserFindAction):
                 result = await self.find_visible_text(action.text, action.max_results)
             elif isinstance(action, BrowserScrollAction):
-                result = await self.scroll(action.direction, action.to_text)
+                result = await self.scroll(
+                    action.direction, action.to_text, action.to_id
+                )
             elif isinstance(action, BrowserSetViewportAction):
                 result = await self.set_viewport(action.width, action.height)
             elif isinstance(action, BrowserGoBackAction):
@@ -1006,14 +1008,26 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
             await self.click(submit_index)
         return await self.get_state(include_screenshot)
 
-    async def scroll(self, direction: str = "down", to_text: str | None = None) -> str:
+    async def scroll(
+        self,
+        direction: str = "down",
+        to_text: str | None = None,
+        to_id: str | None = None,
+    ) -> str:
         """Scroll the page, by a screen or straight to an element.
 
         A target wins over a direction: a caller that named what it is looking
         for has already said which way to go, and asking the page where the
         thing is costs one call whatever the document's length.
+
+        An id wins over text, because it is the stronger claim: text has to be
+        rendered to be matched, an id is on the container from the first paint.
+        A caller that gave both is answered by the one that still works when the
+        section has not rendered yet.
         """
         await self._ensure_initialized()
+        if to_id:
+            return await self._server._scroll_to_id(to_id)
         if to_text:
             return await self._server._scroll_to_text(to_text)
         return await self._server._scroll(direction)
