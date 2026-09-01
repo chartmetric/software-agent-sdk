@@ -114,6 +114,18 @@
     "owner": "OpenHands OSS"
   },
   {
+    "pointer": "/components/schemas/BrowserFindTool/properties/meta/anyOf/0/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "Tool metadata is intentionally extensible across tool providers.",
+    "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/BrowserFindTool/properties/parameters/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A tool's parameter schema is a JSON Schema, which is unrestricted by definition; it is published so a client can show what a tool accepts.",
+    "owner": "OpenHands OSS"
+  },
+  {
     "pointer": "/components/schemas/BrowserGetContentTool/properties/meta/anyOf/0/additionalProperties",
     "kind": "unrestricted-additional-properties",
     "reason": "Tool metadata is intentionally extensible across tool providers.",
