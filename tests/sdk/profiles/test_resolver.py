@@ -137,6 +137,7 @@ def test_openhands_resolves_default_exec_tools(
         "terminal",
         "file_editor",
         "task_tracker",
+        "measure_timing",
     ]
 
 

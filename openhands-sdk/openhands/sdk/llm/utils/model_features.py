@@ -217,7 +217,7 @@ SEND_REASONING_CONTENT_MODELS: list[str] = [
 ]
 
 # Match token -> canonical LiteLLM ID for vision metadata overrides.
-VISION_MODEL_OVERRIDES: dict[str, str] = {}
+VISION_MODEL_OVERRIDES = {"kimi-k3": "moonshot/kimi-k3"}
 
 
 @cache

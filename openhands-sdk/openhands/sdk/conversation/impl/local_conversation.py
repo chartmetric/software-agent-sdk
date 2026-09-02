@@ -1937,10 +1937,15 @@ class LocalConversation(BaseConversation):
                                         ),
                                     )
                                     self._on_event(feedback_msg)
+                                if isinstance(self.agent, ACPAgent) and feedback:
+                                    self._state.execution_status = (
+                                        ConversationExecutionStatus.RUNNING
+                                    )
+                                    continue
                                 self._state.execution_status = (
-                                    ConversationExecutionStatus.RUNNING
+                                    ConversationExecutionStatus.IDLE
                                 )
-                                continue
+                                break
                         # No hooks or hooks allowed stopping
                         break
 
@@ -2132,10 +2137,15 @@ class LocalConversation(BaseConversation):
                                         ),
                                     )
                                     self._on_event(feedback_msg)
+                                if isinstance(self.agent, ACPAgent) and feedback:
+                                    self._state.execution_status = (
+                                        ConversationExecutionStatus.RUNNING
+                                    )
+                                    continue
                                 self._state.execution_status = (
-                                    ConversationExecutionStatus.RUNNING
+                                    ConversationExecutionStatus.IDLE
                                 )
-                                continue
+                                break
                         break
 
                     if self._check_stuck_or_nudge():
