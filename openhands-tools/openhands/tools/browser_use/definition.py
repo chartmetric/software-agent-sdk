@@ -724,20 +724,21 @@ class BrowserScrollAction(BrowserAction):
     to_text: str | None = Field(
         default=None,
         description=(
-            "Text the element shows. Given, the page is asked where that text "
-            "is and scrolled straight to it, and `direction` is ignored."
+            "The exact `id` from `semantic_outline` when one is available, "
+            "otherwise text the element shows. The page scrolls straight to "
+            "it and ignores `direction`."
         ),
     )
 
 
 BROWSER_SCROLL_DESCRIPTION = """Scroll the page, by a screen or straight to something.
 
-Pass `to_text` with words the element shows and the page scrolls directly to it,
-centred: one call, however far down it is and however much of the page has
-loaded. Prefer it whenever you know what you are looking for. `direction` moves
-500 pixels a call, so reaching something far down costs a round trip per screen,
-and on a page that grows as it loads the new content can arrive faster than that
-clears it.
+Pass `to_text` with the exact `id` from `semantic_outline` when one is available;
+an id can reach a lazy section before its visible text mounts. Otherwise pass
+words the element already shows. The page scrolls directly to it, centred: one
+call, however far down it is. Prefer it whenever you know the target. `direction`
+moves one screen a call, so reaching something far down costs a round trip per
+screen.
 
 Use `direction` to survey a page you have no target on yet; `pages_below` from
 browser_get_state says how much is left.
@@ -747,7 +748,7 @@ scrolling: it may not have loaded, it may be behind a tab or an expander that
 has to be opened first, or this may not be the page that renders it.
 
 Parameters:
-- to_text: Text of the element to scroll to (optional)
+- to_text: Exact semantic outline id, or visible element text (optional)
 - direction: "up" or "down", used when no `to_text` is given (optional, default: "down")
 
 Returns the resulting page state, so a following browser_get_state call is
