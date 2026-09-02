@@ -9,6 +9,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from joserfc import jwt as joserfc_jwt
 from joserfc.jwk import KeySet, RSAKey
@@ -93,6 +94,57 @@ def test_openai_subscription_auth_vendor():
     """Test OpenAISubscriptionAuth vendor property."""
     auth = OpenAISubscriptionAuth()
     assert auth.vendor == "openai"
+
+
+@pytest.mark.asyncio
+async def test_subscription_models_include_server_reasoning_levels(tmp_path):
+    store = CredentialStore(credentials_dir=tmp_path)
+    auth = OpenAISubscriptionAuth(credential_store=store)
+    credentials = OAuthCredentials(
+        vendor="openai",
+        access_token="access-token",
+        refresh_token="refresh-token",
+        expires_at=int(time.time() * 1000) + 3600_000,
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/codex/models")
+        assert request.headers["authorization"] == "Bearer access-token"
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "slug": "gpt-5.6-sol",
+                        "default_reasoning_level": "low",
+                        "supported_reasoning_levels": [
+                            {"effort": "low", "description": "Fast"},
+                            {"effort": "max", "description": "Maximum"},
+                        ],
+                    },
+                    {
+                        "slug": "gpt-5.4-mini",
+                        "default_reasoning_level": "medium",
+                        "supported_reasoning_levels": [
+                            {"effort": "low", "description": "Fast"},
+                            {"effort": "high", "description": "Deep"},
+                        ],
+                    },
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        with patch(
+            "openhands.sdk.llm.auth.openai._extract_chatgpt_account_id",
+            return_value="account-123",
+        ):
+            models = await auth.list_models(credentials, httpx_client=client)
+
+    assert [(model.id, model.reasoning_efforts) for model in models] == [
+        ("gpt-5.6-sol", ("low", "max")),
+        ("gpt-5.4-mini", ("low", "high")),
+    ]
 
 
 def test_openai_subscription_auth_get_credentials(tmp_path):

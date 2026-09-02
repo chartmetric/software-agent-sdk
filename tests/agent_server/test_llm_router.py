@@ -10,7 +10,7 @@ from openhands.agent_server.llm_router import (
     list_providers,
     list_verified_models,
 )
-from openhands.sdk.llm.auth.openai import OPENAI_CODEX_MODELS
+from openhands.sdk.llm.auth.openai import OPENAI_CODEX_MODELS, OpenAISubscriptionModel
 from openhands.sdk.llm.utils.verified_models import VERIFIED_MODELS
 
 
@@ -128,12 +128,52 @@ def test_openai_subscription_models_endpoint_integration(client):
     response = client.get("/api/llm/subscription/openai/models")
     assert response.status_code == 200
     data = response.json()
-    assert data == {"vendor": "openai", "models": sorted(OPENAI_CODEX_MODELS)}
+    assert data == {
+        "vendor": "openai",
+        "models": sorted(OPENAI_CODEX_MODELS),
+        "model_details": [],
+    }
     assert "gpt-5.6" in data["models"]
     assert "gpt-5.6-sol" in data["models"]
     assert "gpt-5.6-terra" in data["models"]
     assert "gpt-5.6-luna" in data["models"]
     assert "gpt-5.5" in data["models"]
+
+
+def test_openai_subscription_models_include_dynamic_reasoning_levels(
+    client, monkeypatch
+):
+    from openhands.agent_server import llm_router
+
+    class FakeAuth:
+        async def refresh_if_needed(self):
+            return object()
+
+        async def list_models(self, _credentials):
+            return (
+                OpenAISubscriptionModel(
+                    id="gpt-5.6-sol",
+                    default_reasoning_effort="low",
+                    reasoning_efforts=("low", "max"),
+                ),
+            )
+
+    monkeypatch.setattr(llm_router, "_get_openai_subscription_auth", FakeAuth)
+
+    response = client.get("/api/llm/subscription/openai/models")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "vendor": "openai",
+        "models": ["gpt-5.6-sol"],
+        "model_details": [
+            {
+                "id": "gpt-5.6-sol",
+                "default_reasoning_effort": "low",
+                "reasoning_efforts": ["low", "max"],
+            }
+        ],
+    }
 
 
 def test_openai_subscription_status_endpoint_does_not_return_tokens(
