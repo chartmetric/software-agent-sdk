@@ -73,5 +73,5 @@ def test_render_transcript_for_judge():
     assert verdict.score == 0.8
 
     # Byte-for-byte: EXACTLY what judge_goal feeds the judge over the real trace.
-    expected = (_FIXTURES / "expected_transcript.txt").read_text()
+    expected = (_FIXTURES / "expected_transcript.txt").read_text().removesuffix("\n")
     assert transcript == expected

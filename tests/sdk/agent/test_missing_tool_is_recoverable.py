@@ -21,8 +21,8 @@ from litellm import ChatCompletionMessageToolCall
 from litellm.types.utils import Function
 from pydantic import SecretStr
 
-from openhands.sdk.agent import Agent
-from openhands.sdk.conversation import Conversation
+from openhands.sdk.agent import Agent, AgentBase
+from openhands.sdk.conversation import Conversation, LocalConversation
 from openhands.sdk.event import ActionEvent
 from openhands.sdk.event.error_classification import AGENT_OUTCOME
 from openhands.sdk.event.llm_convertible import AgentErrorEvent
@@ -67,7 +67,7 @@ class _KeptTool(ToolDefinition[_KeptAction, _KeptObservation]):
 register_tool("KeptTool", _KeptTool)
 
 
-def _agent_and_conversation() -> tuple[Agent, Conversation]:
+def _agent_and_conversation() -> tuple[AgentBase, LocalConversation]:
     llm = LLM(
         usage_id="test-llm",
         model="test-model",
@@ -121,6 +121,7 @@ def test_the_error_names_the_tools_the_agent_does_have() -> None:
 
     events = agent._execute_action_event(conversation, _recorded_action("terminal"))
 
+    assert isinstance(events[0], AgentErrorEvent)
     message = events[0].error
     # A refusal that names no alternative spends the turn rediscovering one.
     assert "kept_tool" in message

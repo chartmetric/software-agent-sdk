@@ -436,6 +436,7 @@ class TestLocalConversationPlugins:
             source="https://token-value@example.com/catalog.git",
             ref="release-branch",
             repo_path="catalogs/team",
+            update=True,
         )
         assert conversation.agent.agent_context is not None
         assert [skill.name for skill in conversation.agent.agent_context.skills] == [

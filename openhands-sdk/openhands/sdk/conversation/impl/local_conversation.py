@@ -1938,9 +1938,9 @@ class LocalConversation(BaseConversation):
                                     )
                                     self._on_event(feedback_msg)
                                 self._state.execution_status = (
-                                    ConversationExecutionStatus.IDLE
+                                    ConversationExecutionStatus.RUNNING
                                 )
-                                break
+                                continue
                         # No hooks or hooks allowed stopping
                         break
 
@@ -2133,9 +2133,9 @@ class LocalConversation(BaseConversation):
                                     )
                                     self._on_event(feedback_msg)
                                 self._state.execution_status = (
-                                    ConversationExecutionStatus.IDLE
+                                    ConversationExecutionStatus.RUNNING
                                 )
-                                break
+                                continue
                         break
 
                     if self._check_stuck_or_nudge():
@@ -2763,8 +2763,9 @@ class LocalConversation(BaseConversation):
                     "usage_id": ASK_AGENT_LLM_USAGE_ID,
                     "stream": False,
                 },
-                deep=True,
+                deep=False,
             )
+            question_llm.reset_metrics()
             self.llm_registry.add(question_llm)
 
         # Pass agent tools so LLM can understand tool_calls in conversation history

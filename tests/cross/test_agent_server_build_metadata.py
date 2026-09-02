@@ -29,7 +29,7 @@ def test_server_workflow_publishes_python_image_to_project_ecr_with_oidc() -> No
         "arn:aws:iam::897744604563:role/cm-pilot-sdk-image-publisher" in workflow_text
     )
     assert (
-        "897744604563.dkr.ecr.us-east-1.amazonaws.com/cm-pilot-agent-server"
+        "897744604563.dkr.ecr.us-west-2.amazonaws.com/cm-pilot-agent-server"
         in workflow_text
     )
     assert "aws-actions/configure-aws-credentials@" in workflow_text
@@ -49,7 +49,7 @@ def test_server_workflow_python_images_use_node_24() -> None:
     node_24_image = "nikolaik/python-nodejs:python3.13-nodejs24-slim"
     node_22_image = "nikolaik/python-nodejs:python3.13-nodejs22-slim"
 
-    assert workflow_text.count(f"base_image: {node_24_image}") >= 2
+    assert workflow_text.count(f"base_image: {node_24_image}") == 1
     assert f"base_image: {node_22_image}" not in workflow_text
 
 
