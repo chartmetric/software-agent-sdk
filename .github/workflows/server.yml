@@ -21,7 +21,7 @@ on:
             platforms:
                 description: Target platforms
                 type: string
-                default: linux/amd64,linux/arm64
+                default: linux/amd64
             ecr_source_sha:
                 description: Existing GHCR commit SHA to copy to cm-pilot ECR
                 type: string
@@ -37,7 +37,12 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                os: [ubuntu-latest, macos-latest, windows-latest]
+                # Linux only. Every agent-server this fork publishes runs in a
+                # Linux container, so the macOS and Windows legs tested a
+                # platform nothing deploys to -- and on the priciest runners
+                # GitHub bills (macOS 10x a Linux minute, Windows 2x). Measured
+                # 2026-09-02: 4.6 and 6.1 minutes per build.
+                os: [ubuntu-latest]
         steps:
             - uses: actions/checkout@v7
 
@@ -274,47 +279,28 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                # Explicit matrix: 3 variants × 2 architectures = 6 jobs
-                # Each job specifies exactly what it builds and where it runs
+                # One variant, one architecture, because that is what is used.
+                #
+                # Measured 2026-09-02 against Chartmetric Pilot: the pin is
+                # `<sha>-python`, nothing anywhere references a `-java` or
+                # `-golang` tag, and its ECR holds 5 python images and 0 of the
+                # other two. Every sandbox host is x86_64 -- both the running
+                # fleet and every candidate in SANDBOX_HOST_INSTANCE_TYPES
+                # (r7i/r7a/r6i/r5/m7i/m6i/m5, no Graviton) -- so the arm64 leg
+                # built an image no host can be placed on.
+                #
+                # That was 40 of the 58.6 job-minutes each build spent on
+                # "Build & Push", thrown away every time, plus its share of the
+                # 221 GB sitting in the ECR build cache.
+                #
+                # Restoring a variant is adding its lines back here; the
+                # Dockerfile still accepts any BASE_IMAGE.
                 include:
-                    # Python variant
                     - variant: python
                       arch: amd64
                       base_image: nikolaik/python-nodejs:python3.13-nodejs24-slim
                       runner: ubuntu-24.04
                       platform: linux/amd64
-
-                    - variant: python
-                      arch: arm64
-                      base_image: nikolaik/python-nodejs:python3.13-nodejs24-slim
-                      runner: ubuntu-24.04-arm
-                      platform: linux/arm64
-
-                    # Java variant
-                    - variant: java
-                      arch: amd64
-                      base_image: eclipse-temurin:17-jdk
-                      runner: ubuntu-24.04
-                      platform: linux/amd64
-
-                    - variant: java
-                      arch: arm64
-                      base_image: eclipse-temurin:17-jdk
-                      runner: ubuntu-24.04-arm
-                      platform: linux/arm64
-
-                    # Golang variant
-                    - variant: golang
-                      arch: amd64
-                      base_image: golang:1.21-bookworm
-                      runner: ubuntu-24.04
-                      platform: linux/amd64
-
-                    - variant: golang
-                      arch: arm64
-                      base_image: golang:1.21-bookworm
-                      runner: ubuntu-24.04-arm
-                      platform: linux/arm64
 
         runs-on: ${{ matrix.runner }}
 
@@ -495,7 +481,7 @@ jobs:
         runs-on: ubuntu-24.04
         strategy:
             matrix:
-                variant: [python, java, golang]
+                variant: [python]
         env:
             IMAGE: ${{ inputs.image != '' && inputs.image || 'ghcr.io/chartmetric/agent-server' }}
 
@@ -541,9 +527,12 @@ jobs:
                       local source_tag=${2:-$1}
 
                       echo "Creating multi-arch manifest: ${IMAGE}:${manifest_tag}"
+                      # amd64 only -- see the build matrix. `imagetools
+                      # create` still produces an index, so the published tag
+                      # keeps the same shape and a second architecture is one
+                      # line away.
                       docker buildx imagetools create -t ${IMAGE}:${manifest_tag} \
-                        ${IMAGE}:${source_tag}-amd64 \
-                        ${IMAGE}:${source_tag}-arm64
+                        ${IMAGE}:${source_tag}-amd64
 
                       echo "Inspecting multi-arch manifest:"
                       docker buildx imagetools inspect ${IMAGE}:${manifest_tag}
@@ -683,10 +672,14 @@ jobs:
               run: |
                   image="${ECR_IMAGE}:${SDK_SHA}-python"
                   manifest="$(docker buildx imagetools inspect --raw "$image")"
+                  # amd64 only: the build matrix publishes one architecture
+                  # because every sandbox host is x86_64. Requiring arm64 here
+                  # would fail the publish for an image nothing can be placed
+                  # on. Still asserted rather than dropped -- an image whose
+                  # platform is not what the hosts run is worth failing over.
                   printf '%s' "$manifest" | jq -e '
                     [.manifests[].platform | "\(.os)/\(.architecture)"] as $platforms
                     | ($platforms | index("linux/amd64")) != null
-                      and ($platforms | index("linux/arm64")) != null
                   '
 
     consolidate-build-info:
@@ -898,7 +891,7 @@ jobs:
                       echo "DEBUG: Processing build JSON: $VARIANT_JSON"
                       CUSTOM_TAGS=$(echo "$VARIANT_JSON" | jq -r '.custom_tags')
                       BASE_IMAGE=$(echo "$VARIANT_JSON" | jq -r '.base_image')
-                      ARCHS=$(echo "$VARIANT_JSON" | jq -r '.architectures // "amd64, arm64"')
+                      ARCHS=$(echo "$VARIANT_JSON" | jq -r '.architectures // "amd64"')
                       
                       echo "DEBUG: Adding variant $CUSTOM_TAGS with base image $BASE_IMAGE (archs: $ARCHS)"
                       # Add to variants table with architecture info
@@ -924,7 +917,7 @@ jobs:
 
                   **Pull (multi-arch manifest)**
                   \`\`\`bash
-                  # Each variant is a multi-arch manifest supporting both amd64 and arm64
+                  # One variant, amd64 only -- see the build matrix.
                   docker pull ${IMAGE}:${SHORT_SHA}-python
                   \`\`\`
 
@@ -942,7 +935,7 @@ jobs:
                   \`\`\`
 
                   **About Multi-Architecture Support**
-                  - Each variant tag (e.g., \`${SHORT_SHA}-python\`) is a **multi-arch manifest** supporting both **amd64** and **arm64**
+                  - The variant tag (e.g., \`${SHORT_SHA}-python\`) is an image index carrying **amd64**
                   - Docker automatically pulls the correct architecture for your platform
                   - Individual architecture tags (e.g., \`${SHORT_SHA}-python-amd64\`) are also available if needed
                   <!-- AGENT_SERVER_IMAGES_END -->
