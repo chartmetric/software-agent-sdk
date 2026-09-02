@@ -26,6 +26,8 @@ def test_a_large_window_folds_late_and_a_small_one_early() -> None:
     large = _window_fold_budget(_llm(922_000, 128_000))
     small = _window_fold_budget(_llm(128_000, 4_096))
 
+    assert large is not None
+    assert small is not None
     assert large == int((922_000 - 128_000) * CONTEXT_WINDOW_FOLD_FRACTION)
     assert small == int((128_000 - 4_096) * CONTEXT_WINDOW_FOLD_FRACTION)
     assert small < 128_000, "a fold must happen before the window is full"

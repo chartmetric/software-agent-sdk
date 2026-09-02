@@ -17,6 +17,7 @@ import threading
 import time
 import webbrowser
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlencode
@@ -141,6 +142,15 @@ def _get_current_codex_model_ids() -> frozenset[str]:
 # Models available via ChatGPT subscription (not API). Keep these aligned with
 # the current Codex ACP registry, which is the shared picker source.
 OPENAI_CODEX_MODELS = _get_current_codex_model_ids()
+
+
+@dataclass(frozen=True)
+class OpenAISubscriptionModel:
+    """One model advertised by the authenticated ChatGPT Codex endpoint."""
+
+    id: str
+    default_reasoning_effort: str | None
+    reasoning_efforts: tuple[str, ...]
 
 
 # Thread-safe JWKS cache
@@ -745,6 +755,74 @@ class OpenAISubscriptionAuth:
     def extract_chatgpt_account_id(self, credentials: OAuthCredentials) -> str | None:
         """Return the ChatGPT account id for request headers, if present."""
         return _extract_chatgpt_account_id(credentials.access_token)
+
+    async def list_models(
+        self,
+        credentials: OAuthCredentials | None = None,
+        *,
+        httpx_client: AsyncClient | None = None,
+        client_version: str | None = None,
+    ) -> tuple[OpenAISubscriptionModel, ...]:
+        """Fetch model-specific reasoning levels from the ChatGPT Codex API."""
+        creds = credentials or self.get_credentials()
+        if creds is None:
+            raise ValueError(
+                "No credentials available. Call login() first or provide credentials."
+            )
+        resolved_version = client_version or version("openhands-sdk")
+        headers = {
+            "Authorization": f"Bearer {creds.access_token}",
+            "originator": "codex_cli_rs",
+            "OpenAI-Beta": "responses=experimental",
+            "User-Agent": f"openhands-sdk/{resolved_version}",
+        }
+        account_id = _extract_chatgpt_account_id(creds.access_token)
+        if account_id:
+            headers["chatgpt-account-id"] = account_id
+
+        async def fetch(client: AsyncClient):
+            response = await client.get(
+                f"{CODEX_API_ENDPOINT.rsplit('/', 1)[0]}/models",
+                params={"client_version": resolved_version},
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        if httpx_client is None:
+            async with AsyncClient(timeout=5) as client:
+                payload = await fetch(client)
+        else:
+            payload = await fetch(httpx_client)
+
+        raw_models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(raw_models, list):
+            return ()
+        models: list[OpenAISubscriptionModel] = []
+        for raw_model in raw_models:
+            if not isinstance(raw_model, dict):
+                continue
+            model_id = raw_model.get("slug")
+            if not isinstance(model_id, str) or not model_id:
+                continue
+            efforts: list[str] = []
+            levels = raw_model.get("supported_reasoning_levels")
+            if isinstance(levels, list):
+                for level in levels:
+                    effort = level.get("effort") if isinstance(level, dict) else None
+                    if isinstance(effort, str) and effort and effort not in efforts:
+                        efforts.append(effort)
+            default_effort = raw_model.get("default_reasoning_level")
+            models.append(
+                OpenAISubscriptionModel(
+                    id=model_id,
+                    default_reasoning_effort=(
+                        default_effort if isinstance(default_effort, str) else None
+                    ),
+                    reasoning_efforts=tuple(efforts),
+                )
+            )
+        return tuple(models)
 
     def logout(self) -> bool:
         """Remove stored credentials.

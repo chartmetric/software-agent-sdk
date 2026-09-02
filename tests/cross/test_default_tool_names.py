@@ -17,6 +17,7 @@ from openhands.sdk.tool.defaults import (
 
 def test_default_exec_names_match_tool_classes() -> None:
     from openhands.tools.file_editor import FileEditorTool
+    from openhands.tools.measure_timing import MeasureTimingTool
     from openhands.tools.task_tracker import TaskTrackerTool
     from openhands.tools.terminal import TerminalTool
 
@@ -24,6 +25,7 @@ def test_default_exec_names_match_tool_classes() -> None:
         TerminalTool.name,
         FileEditorTool.name,
         TaskTrackerTool.name,
+        MeasureTimingTool.name,
     )
 
 

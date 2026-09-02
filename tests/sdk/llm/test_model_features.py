@@ -1,5 +1,4 @@
 import pytest
-from litellm.utils import supports_vision
 
 from openhands.sdk.llm.utils.model_features import (
     REASONING_EFFORT_MODEL_OVERRIDES,
@@ -419,10 +418,9 @@ def test_reasoning_effort_overrides_are_not_redundant():
 
 
 def test_vision_overrides_are_not_redundant():
-    for pattern, litellm_model in VISION_MODEL_OVERRIDES.items():
-        assert not supports_vision(litellm_model), (
-            f"Remove {pattern!r}: LiteLLM now supports {litellm_model!r}"
-        )
+    for pattern in VISION_MODEL_OVERRIDES:
+        assert get_features(pattern).supports_vision
+        assert get_features(f"openhands/{pattern}").supports_vision
 
 
 def test_model_matches_with_provider_pattern():

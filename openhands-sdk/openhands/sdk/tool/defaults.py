@@ -18,6 +18,7 @@ DEFAULT_EXEC_TOOL_NAMES: tuple[str, ...] = (
     "terminal",
     "file_editor",
     "task_tracker",
+    "measure_timing",
 )
 """Names of the standard exec tools every default OpenHands agent gets."""
 

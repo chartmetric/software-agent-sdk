@@ -91,6 +91,15 @@ class SubscriptionModelsResponse(BaseModel):
 
     vendor: str = "openai"
     models: list[str]
+    model_details: list[SubscriptionModelDetail] = Field(default_factory=list)
+
+
+class SubscriptionModelDetail(BaseModel):
+    """Model-specific reasoning choices advertised by the provider."""
+
+    id: str
+    default_reasoning_effort: str | None = None
+    reasoning_efforts: list[str] = Field(default_factory=list)
 
 
 def _get_openai_subscription_auth() -> OpenAISubscriptionAuth:
@@ -163,7 +172,25 @@ async def list_verified_models() -> VerifiedModelsResponse:
 )
 async def list_openai_subscription_models() -> SubscriptionModelsResponse:
     """List models available through ChatGPT subscription authentication."""
-    return SubscriptionModelsResponse(models=sorted(OPENAI_CODEX_MODELS))
+    auth = _get_openai_subscription_auth()
+    try:
+        credentials = await auth.refresh_if_needed()
+        dynamic_models = await auth.list_models(credentials) if credentials else ()
+    except Exception:
+        dynamic_models = ()
+    if not dynamic_models:
+        return SubscriptionModelsResponse(models=sorted(OPENAI_CODEX_MODELS))
+    details = [
+        SubscriptionModelDetail(
+            id=model.id,
+            default_reasoning_effort=model.default_reasoning_effort,
+            reasoning_efforts=list(model.reasoning_efforts),
+        )
+        for model in dynamic_models
+    ]
+    return SubscriptionModelsResponse(
+        models=[model.id for model in dynamic_models], model_details=details
+    )
 
 
 @llm_router.get(

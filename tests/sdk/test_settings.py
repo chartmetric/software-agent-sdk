@@ -806,7 +806,12 @@ def test_create_agent_defaults_tools_when_none() -> None:
     settings = OpenHandsAgentSettings(llm=LLM(model="test-model"))
     assert settings.tools is None
     agent = settings.create_agent()
-    assert [t.name for t in agent.tools] == ["terminal", "file_editor", "task_tracker"]
+    assert [t.name for t in agent.tools] == [
+        "terminal",
+        "file_editor",
+        "task_tracker",
+        "measure_timing",
+    ]
 
 
 def test_create_agent_default_tools_honor_enable_sub_agents() -> None:
@@ -818,6 +823,7 @@ def test_create_agent_default_tools_honor_enable_sub_agents() -> None:
         "terminal",
         "file_editor",
         "task_tracker",
+        "measure_timing",
         "task_tool_set",
     ]
 

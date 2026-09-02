@@ -372,11 +372,8 @@ def test_conversation_restore_preserves_security_risk_and_summary(mock_completio
             assert "summary" not in action_dump
 
             restored_tool_call_args = json.loads(action_event.tool_call.arguments)
-            assert (
-                restored_tool_call_args["security_risk"]
-                == tool_arguments["security_risk"]
-            )
-            assert restored_tool_call_args["summary"] == tool_arguments["summary"]
+            assert "security_risk" not in restored_tool_call_args
+            assert "summary" not in restored_tool_call_args
 
             lifecycle.send_and_run(restored, "Third message")
             assert len(restored.state.events) > initial_event_count

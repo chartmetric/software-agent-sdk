@@ -1937,6 +1937,11 @@ class LocalConversation(BaseConversation):
                                         ),
                                     )
                                     self._on_event(feedback_msg)
+                                if isinstance(self.agent, ACPAgent) and feedback:
+                                    self._state.execution_status = (
+                                        ConversationExecutionStatus.RUNNING
+                                    )
+                                    continue
                                 self._state.execution_status = (
                                     ConversationExecutionStatus.IDLE
                                 )
@@ -2132,6 +2137,11 @@ class LocalConversation(BaseConversation):
                                         ),
                                     )
                                     self._on_event(feedback_msg)
+                                if isinstance(self.agent, ACPAgent) and feedback:
+                                    self._state.execution_status = (
+                                        ConversationExecutionStatus.RUNNING
+                                    )
+                                    continue
                                 self._state.execution_status = (
                                     ConversationExecutionStatus.IDLE
                                 )
@@ -2763,8 +2773,9 @@ class LocalConversation(BaseConversation):
                     "usage_id": ASK_AGENT_LLM_USAGE_ID,
                     "stream": False,
                 },
-                deep=True,
+                deep=False,
             )
+            question_llm.reset_metrics()
             self.llm_registry.add(question_llm)
 
         # Pass agent tools so LLM can understand tool_calls in conversation history

@@ -270,6 +270,7 @@ jobs:
 
     agent-server-tests:
         runs-on: ubuntu-latest
+        timeout-minutes: 15
         steps:
             - name: Checkout
               uses: actions/checkout@v7
@@ -306,6 +307,7 @@ jobs:
                   # coverage collection. --forked prevents coverage from child processes.
                   CI=true uv run python -m pytest -vvs \
                     -n auto \
+                    --forked \
                     --cov=openhands-agent-server \
                     --cov-report=term-missing \
                     --cov-fail-under=0 \
