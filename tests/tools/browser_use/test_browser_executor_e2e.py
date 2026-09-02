@@ -68,6 +68,7 @@ TEST_HTML = """<!DOCTYPE html>
             <p>This is a long section for scroll testing...</p>
         </div>
 
+        <section id="lazy-insights" aria-busy="true"></section>
         <h2 id="section2">Section 2</h2>
         <p>You've reached section 2!</p>
         <div style="opacity: 0"><h2>Hidden Section</h2></div>
@@ -106,6 +107,19 @@ PAGE2_HTML = """<!DOCTYPE html>
     <h1>Page 2</h1>
     <p>This is the second page for navigation testing.</p>
     <a href="index.html">Back to Page 1</a>
+</body>
+</html>"""
+
+DELAYED_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head><title>Delayed App</title></head>
+<body>
+    <div id="root"></div>
+    <script>
+        setTimeout(() => {
+            document.getElementById('root').innerHTML = '<h1>Mounted App</h1>';
+        }, 250);
+    </script>
 </body>
 </html>"""
 
@@ -155,6 +169,9 @@ def test_server() -> Generator[str]:
 
         with open(os.path.join(temp_dir, "page2.html"), "w", encoding="utf-8") as f:
             f.write(PAGE2_HTML)
+
+        with open(os.path.join(temp_dir, "delayed.html"), "w", encoding="utf-8") as f:
+            f.write(DELAYED_HTML)
 
         # Start HTTP server
         port = _get_free_port()
@@ -258,9 +275,26 @@ class TestBrowserExecutorE2E:
             and item["y"] > 1000
             for item in outline
         )
+        assert any(
+            item["id"] == "lazy-insights" and item["name"] == "lazy-insights"
+            for item in outline
+        )
         assert all(item["name"] != "Hidden Section" for item in outline)
         hidden = browser_executor(BrowserFindAction(text="Hidden Section"))
         assert json.loads(hidden.text)["matches"] == []
+
+    def test_navigate_waits_for_delayed_app_mount(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        result = browser_executor(
+            BrowserNavigateAction(url=f"{test_server}/delayed.html")
+        )
+
+        assert not result.is_error
+        state = json.loads(result.text.split("\n\n", maxsplit=1)[1])
+        assert any(
+            item["name"] == "Mounted App" for item in state["semantic_outline"]["items"]
+        )
 
     def test_find_visible_text_without_moving_the_page(
         self, browser_executor: BrowserToolExecutor, test_server: str

@@ -18,6 +18,7 @@ from openhands.tools.browser_use.definition import (
     BrowserFillFormAction,
     BrowserFormField,
     BrowserGetStateAction,
+    BrowserScrollAction,
 )
 from openhands.tools.browser_use.impl import BrowserToolExecutor
 
@@ -156,6 +157,13 @@ def test_browser_toolset_create_tools_are_properly_configured():
         assert navigate_tool.action_type is not None
         assert navigate_tool.observation_type is not None
         assert navigate_tool.executor is not None
+
+
+def test_browser_scroll_prefers_exact_semantic_outline_id():
+    description = BrowserScrollAction.model_fields["to_text"].description
+
+    assert description is not None
+    assert "exact `id` from `semantic_outline`" in description
 
 
 def test_browser_toolset_create_multiple_calls_share_executor():

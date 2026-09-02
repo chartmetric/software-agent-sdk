@@ -13,6 +13,7 @@ def playwright_runtime():
     page = MagicMock()
     page.url = "about:blank"
     page.goto = AsyncMock()
+    page.wait_for_function = AsyncMock()
     page.evaluate = AsyncMock()
     page.screenshot = AsyncMock(return_value=b"jpeg-bytes")
     page.close = AsyncMock()

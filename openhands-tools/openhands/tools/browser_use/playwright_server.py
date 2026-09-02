@@ -79,15 +79,16 @@ _STATE_SCRIPT = r"""
     const rect = element.getBoundingClientRect();
     const tag = element.tagName.toLowerCase();
     const role = (element.getAttribute('role') || tag).toLowerCase();
+    const stableId = (element.id || '').slice(0, 120);
     const name = (element.getAttribute('aria-label') || element.innerText || '')
       .trim().replace(/\s+/g, ' ').slice(0, 160);
-    if (!name && !['main', 'nav', 'aside'].includes(tag)) continue;
+    if (!name && !stableId && !['main', 'nav', 'aside'].includes(tag)) continue;
     outline.push({
       kind: /^h[1-6]$/.test(tag) || role === 'heading' ? 'heading' : 'landmark',
       tag,
       role: tag === 'nav' && role === 'nav' ? 'navigation' : role,
-      name: name || role,
-      id: (element.id || '').slice(0, 120),
+      name: name || stableId || role,
+      id: stableId,
       y: Math.round(rect.top + scrollY),
       location: rect.bottom < 0
         ? 'above' : rect.top > innerHeight ? 'below' : 'viewport',
@@ -189,6 +190,7 @@ class PlaywrightBrowserServer:
         self._validate_url(url)
         page = await self._new_page() if new_tab else self._require_page()
         await page.goto(url, wait_until="domcontentloaded")
+        await self._wait_for_meaningful_page(page)
         return f"Navigated to {url}"
 
     async def go_back(self) -> str:
@@ -221,6 +223,7 @@ class PlaywrightBrowserServer:
                 pass
         else:
             await locator.click()
+        await self._wait_for_meaningful_page(self._require_page())
         if box is not None and self._screencast_session is not None:
             self._screencast_session.notify_agent_cursor(
                 box["x"] + box["width"] / 2,
@@ -228,6 +231,22 @@ class PlaywrightBrowserServer:
                 "mouseReleased",
             )
         return f"Clicked element {index}"
+
+    async def _wait_for_meaningful_page(self, page: Page) -> None:
+        try:
+            await page.wait_for_function(
+                """
+                () => Boolean(
+                  document.body?.innerText.trim() ||
+                  document.querySelector(
+                    'a[href], button, input, textarea, select, canvas, [role]'
+                  )
+                )
+                """,
+                timeout=2000,
+            )
+        except PlaywrightTimeoutError:
+            pass
 
     async def type_text(self, index: int, text: str, *, secret: bool = False) -> str:
         locator = self._indexed_locator(index)
