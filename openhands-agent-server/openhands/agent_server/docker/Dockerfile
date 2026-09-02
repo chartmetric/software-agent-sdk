@@ -219,7 +219,13 @@ RUN set -ux; \
         rm -rf "$ACP_NODE_DIR"/*; \
       fi; \
     fi; \
-    rm -f "$NODE_TARBALL" 2>/dev/null || true
+    rm -f "$NODE_TARBALL" 2>/dev/null || true; \
+    # The caches `npm install -g` and node-gyp leave behind are build residue
+    # that ships in the layer and does nothing at runtime. Measured on the
+    # 2026-09-02 image: 282 MB of ~/.npm/_cacache and 49 MB of
+    # ~/.cache/node-gyp, uncompressed, inside the single largest layer.
+    npm cache clean --force 2>/dev/null || true; \
+    rm -rf /root/.npm /root/.cache/node-gyp /tmp/node-compile-cache 2>/dev/null || true
 
 # Configure Claude Code managed settings for headless operation:
 # Allow all tool permissions (no human in the loop to approve).
