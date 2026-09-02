@@ -21,7 +21,7 @@ from litellm import ChatCompletionMessageToolCall
 from litellm.types.utils import Function
 from pydantic import SecretStr
 
-from openhands.sdk.agent import Agent, AgentBase
+from openhands.sdk.agent import Agent
 from openhands.sdk.conversation import Conversation, LocalConversation
 from openhands.sdk.event import ActionEvent
 from openhands.sdk.event.error_classification import AGENT_OUTCOME
@@ -67,7 +67,7 @@ class _KeptTool(ToolDefinition[_KeptAction, _KeptObservation]):
 register_tool("KeptTool", _KeptTool)
 
 
-def _agent_and_conversation() -> tuple[AgentBase, LocalConversation]:
+def _agent_and_conversation() -> tuple[Agent, LocalConversation]:
     llm = LLM(
         usage_id="test-llm",
         model="test-model",
@@ -79,6 +79,7 @@ def _agent_and_conversation() -> tuple[AgentBase, LocalConversation]:
     # The conversation holds its own copy, and only builds its tools map when it
     # first runs -- do that here so `tools_map` is populated.
     conversation.agent._initialize(conversation.state)
+    assert isinstance(conversation.agent, Agent)
     return conversation.agent, conversation
 
 
