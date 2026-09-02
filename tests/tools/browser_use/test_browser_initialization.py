@@ -112,6 +112,42 @@ class TestBrowserInitialization:
 
             assert executor._config == expected_config
 
+    def test_initialization_disables_chromium_sandbox_when_the_environment_says_so(
+        self,
+    ):
+        """A non-root agent in a container that cannot sandbox Chromium.
+
+        Root already disables the sandbox; a non-root process with no user
+        namespaces and no setuid helper fails at launch instead, and every
+        browser tool with it. The environment that runs the agent is the one
+        that knows, so OH_CHROMIUM_SANDBOX=false is honoured explicitly.
+        """
+        mock_server = MagicMock()
+
+        with (
+            patch.object(
+                BrowserToolExecutor,
+                "_ensure_chromium_available",
+                return_value="/usr/bin/chromium",
+            ),
+            patch(
+                "openhands.tools.browser_use.impl.CustomBrowserUseServer",
+                return_value=mock_server,
+            ),
+            patch(
+                "openhands.tools.browser_use.impl.os.getuid",
+                return_value=1000,
+                create=True,
+            ),  # Non-root user
+            patch.dict(
+                "openhands.tools.browser_use.impl.os.environ",
+                {"OH_CHROMIUM_SANDBOX": "false"},
+            ),
+        ):
+            executor = BrowserToolExecutor()
+
+        assert executor._config["chromium_sandbox"] is False
+
     def test_initialization_server_creation_with_timeout(self):
         """Test that server is created with correct session timeout."""
         mock_server = MagicMock()

@@ -369,11 +369,37 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
                     "(required for root). This reduces security isolation."
                 )
 
+            # Root is not the only case where Chromium's own sandbox cannot
+            # start. A non-root process inside a container or microVM whose
+            # kernel offers no unprivileged user namespaces and whose image
+            # carries no setuid helper fails at launch with "Chromium
+            # sandboxing failed!" -- every browser tool then fails, and the
+            # tool that failed is the one that takes the evidence screenshot.
+            # Measured in Chartmetric Pilot production (conversation 5d2c8eee,
+            # 2026-09-02): two navigations, two launch failures, a visual
+            # change delivered with no picture. The environment that runs the
+            # agent knows whether it can provide the sandbox, so it says so:
+            # OH_CHROMIUM_SANDBOX=false disables it explicitly, and the
+            # default keeps the behaviour above.
+            chromium_sandbox = not running_as_root
+            sandbox_setting = os.getenv("OH_CHROMIUM_SANDBOX")
+            if sandbox_setting is not None and sandbox_setting.strip().lower() in {
+                "false",
+                "0",
+                "no",
+            }:
+                if chromium_sandbox:
+                    logger.warning(
+                        "OH_CHROMIUM_SANDBOX=false - disabling Chromium sandbox "
+                        "for this environment. This reduces security isolation."
+                    )
+                chromium_sandbox = False
+
             self._config = {
                 "headless": headless,
                 "allowed_domains": allowed_domains or [],
                 "executable_path": executable_path,
-                "chromium_sandbox": not running_as_root,
+                "chromium_sandbox": chromium_sandbox,
                 **config,
             }
 
