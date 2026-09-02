@@ -230,6 +230,18 @@ RUN mkdir -p /etc/claude-code && \
 # since the agent might use it to perform other work (e.g. tools that use Python)
 COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /uvx /bin/
 
+# Redis, and only Redis, from what the full base image adds. It is here rather
+# than there because a repository runtime asks for it: of Chartmetric Pilot's
+# twelve configured runtimes, one declares redis and none declares docker,
+# docker-compose or chromium (measured 2026-09-02 against the production
+# database). Everything else the full image installs is carried by every
+# sandbox and used by none.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends redis-server; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
 USER ${USERNAME}
 WORKDIR /
 # Locale settings required for libtmux to work with PyInstaller builds
