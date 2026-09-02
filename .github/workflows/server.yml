@@ -310,26 +310,7 @@ jobs:
             CUSTOM_TAGS: ${{ matrix.variant }}
             VARIANT: ${{ matrix.variant }}
             ARCH: ${{ matrix.arch }}
-            # binary-minimal, not binary. The full base image adds
-            # openvscode-server, a whole Docker engine, an XFCE desktop with
-            # VNC and noVNC, ffmpeg, the gh CLI and a second chromium -- about
-            # 1.4 GB of a 1.8 GB image. Measured against Chartmetric Pilot's
-            # production logs on 2026-09-02: the VS Code proxy was used by 0
-            # sandboxes in seven days, the desktop proxy by 0, and of twelve
-            # configured repository runtimes none required docker or chromium.
-            # The Dockerfile's own comment on the GUI packages reads "remove
-            # entirely if headless", which every sandbox here is.
-            #
-            # This is not only disk. A start pays image *extraction* the first
-            # time a container runs, and that is where the time goes: a
-            # provisioning run instrumented per phase spent 133 of its 133
-            # seconds between "image present" and "first container ran", with
-            # the download itself at 0s.
-            #
-            # Playwright is unaffected -- its chromium is installed in the
-            # builder stage and copied into both targets, so browser tools keep
-            # working.
-            TARGET: binary-minimal
+            TARGET: binary
             PLATFORM: ${{ matrix.platform }}
             # Use SDK_SHA/SDK_REF so build.py tags PR images with the head commit and branch.
             # GITHUB_SHA/GITHUB_REF point at the synthetic merge ref on pull_request events.

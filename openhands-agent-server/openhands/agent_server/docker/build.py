@@ -39,6 +39,9 @@ logger = get_logger(__name__)
 VALID_TARGETS = {
     "binary",
     "binary-minimal",
+    # The editor/desktop/Docker combination `binary` used to be, kept buildable
+    # under a name of its own now that `binary` builds from the minimal base.
+    "binary-full",
     "source",
     "source-minimal",
     "base-image-minimal",

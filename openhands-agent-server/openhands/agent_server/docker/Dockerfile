@@ -398,7 +398,26 @@ ENTRYPOINT ["tini", "--", "/agent-server/.venv/bin/python", "-m", "openhands.age
 # Production mode: build the binary inside Docker and copy it in.
 # NOTE: no support for external artifact contexts anymore.
 ############################
-FROM base-image AS binary
+# base-image-minimal, not base-image. The full base adds openvscode-server, a
+# Docker engine, an XFCE desktop with VNC and noVNC, ffmpeg, the gh CLI and a
+# second chromium -- roughly 1.4 GB of a 1.8 GB image, carried by every sandbox
+# and used by none of them. Measured against Chartmetric Pilot's production on
+# 2026-09-02: the VS Code proxy served 0 sandboxes in seven days, the desktop
+# proxy 0, and of twelve configured repository runtimes none required docker or
+# chromium (one required redis, which is why redis moved into the minimal
+# stage above).
+#
+# This is the *default* target rather than a second one because the tag
+# contract depends on it: `build.py` appends the target name to every tag for
+# anything but `binary`, so publishing `binary-minimal` renamed the images to
+# `<sha>-python-amd64-binary-minimal` and the manifest merge and the ECR copy,
+# which look for `<sha>-python-amd64`, could not find them. Keeping the name
+# and changing what it builds leaves every downstream contract intact.
+#
+# Playwright is unaffected: its chromium is installed in the builder stage and
+# copied in below, so browser tools keep working. Anything that genuinely wants
+# the editor or a Docker engine can build `binary-full`.
+FROM base-image-minimal AS binary
 ARG USERNAME
 
 COPY --chown=${USERNAME}:${USERNAME} --from=binary-builder /agent-server/dist/openhands-agent-server /usr/local/bin/openhands-agent-server
@@ -417,4 +436,20 @@ RUN chmod +x /usr/local/bin/openhands-agent-server
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 # Fix library path to use system GCC libraries instead of bundled ones
 ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+ENTRYPOINT ["tini", "--", "/usr/local/bin/openhands-agent-server"]
+
+####################################################################################
+# Target B-full: the editor/desktop/Docker combination `binary` used to be
+#
+# Nothing in this repository builds it. It exists so that combination is one
+# `--target binary-full` away rather than a revert, for a caller that wants
+# openvscode-server, a Docker engine or the XFCE/VNC desktop in the sandbox.
+####################################################################################
+FROM base-image AS binary-full
+ARG USERNAME
+
+COPY --chown=${USERNAME}:${USERNAME} --from=binary-builder /agent-server/dist/openhands-agent-server /usr/local/bin/openhands-agent-server
+RUN chmod +x /usr/local/bin/openhands-agent-server
+ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+ENV PLAYWRIGHT_BROWSERS_PATH=/agent-server/playwright-browsers
 ENTRYPOINT ["tini", "--", "/usr/local/bin/openhands-agent-server"]
