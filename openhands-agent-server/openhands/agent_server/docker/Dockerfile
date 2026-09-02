@@ -165,17 +165,30 @@ RUN set -eux; \
     mkdir -p /workspace/project; \
     chown -R "${USERNAME}:${USERNAME}" /workspace
 
-# Pre-install ACP servers for ACPAgent support (Claude Code, Codex, Gemini CLI)
-# Install Node.js 22 to a dedicated prefix so ACP packages get a modern runtime
-# WITHOUT overwriting the repo-specific Node.js that test suites depend on.
-# SWE-bench images ship NVM/apt-managed Node 8-14 which cannot run ACP packages.
+# ACP servers (Claude Code, Codex, Gemini CLI), off by default.
 #
-# This step is best-effort: SWE-Bench Pro base images come from many distros
-# and some have an old glibc (or use musl) that cannot run the upstream Node
-# 22 glibc tarball. When that happens we leave $ACP_NODE_DIR empty and skip
-# ACP setup so the rest of the build (and non-ACP agents) still work.
+# `ENABLE_ACP=1` restores them. They are a second Node 22 runtime plus three
+# third-party agent CLIs, and they are the largest thing in this image: 945 MB
+# uncompressed, 74% of its biggest layer.
+#
+# Off because an ACP agent replaces the *agent*, not the model. Chartmetric
+# Pilot -- which this fork is built for -- ran 3,456 conversations in the
+# thirty days to 2026-09-02 and every one used `agent_kind = openhands`; none
+# used an ACP agent. Its own direction is to keep the OpenHands agent and pay
+# for the model through a subscription, which keeps the evidence loop,
+# publication gates and repository tooling that a foreign CLI does not run.
+#
+# Nothing else changes: `ACPAgentSettings` and the ACP routing stay in the
+# code, so re-enabling is a build argument rather than a revert. A conversation
+# that selects an ACP agent on an image built without them fails at launch,
+# which is the trade being made deliberately.
+ARG ENABLE_ACP=0
 ENV ACP_NODE_DIR=/opt/acp-node
 RUN set -ux; \
+    if [ "${ENABLE_ACP}" != "1" ]; then \
+      echo "Skipping ACP servers (ENABLE_ACP=${ENABLE_ACP})"; \
+      exit 0; \
+    fi; \
     mkdir -p "$ACP_NODE_DIR"; \
     ARCH=$(uname -m); \
     NARCH=""; \
