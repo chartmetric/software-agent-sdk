@@ -261,6 +261,35 @@ RUN set -eux; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
+# What Playwright's chromium needs from the OS, and nothing else of what the
+# full image installs. The binary itself is built in the builder stage and
+# copied into every target below, but a browser is a binary plus the shared
+# libraries it loads, and those used to arrive as dependencies of the distro
+# `chromium` package the full base image installed. Dropping that package
+# dropped them: measured on Chartmetric Pilot production on 2026-09-02, the
+# first sandbox to run the minimal image failed every browser tool with
+# `chrome: error while loading shared libraries: libglib-2.0.so.0: cannot
+# open shared object file`, released both of its screenshot obligations for
+# that reason, and delivered a visual change with no picture of it -- after
+# 104 conversations had browsed successfully the day before.
+#
+# The list is Playwright's own for `debian12` chromium (`playwright
+# install-deps chromium`, from the driver's native-deps table), plus the font
+# packages a headless browser needs to render any text at all; the slim base
+# ships none. Roughly 90 MB against the 460 MB the minimal image saved.
+RUN set -eux; \
+    if command -v apt-get >/dev/null 2>&1; then \
+        apt-get update; \
+        apt-get install -y --no-install-recommends \
+            libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 \
+            libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 \
+            libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+            libxfixes3 libxkbcommon0 libxrandr2 \
+            libfontconfig1 libfreetype6 fonts-liberation fonts-noto-color-emoji; \
+        apt-get clean; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
 USER ${USERNAME}
 WORKDIR /
 # Locale settings required for libtmux to work with PyInstaller builds
@@ -433,9 +462,11 @@ ENTRYPOINT ["tini", "--", "/agent-server/.venv/bin/python", "-m", "openhands.age
 # which look for `<sha>-python-amd64`, could not find them. Keeping the name
 # and changing what it builds leaves every downstream contract intact.
 #
-# Playwright is unaffected: its chromium is installed in the builder stage and
-# copied in below, so browser tools keep working. Anything that genuinely wants
-# the editor or a Docker engine can build `binary-full`.
+# Playwright's chromium is installed in the builder stage and copied in below;
+# the shared libraries it loads are installed into base-image-minimal above,
+# because a copied binary without them is the failure production measured on
+# 2026-09-02. Anything that genuinely wants the editor or a Docker engine can
+# build `binary-full`.
 FROM base-image-minimal AS binary
 ARG USERNAME
 
