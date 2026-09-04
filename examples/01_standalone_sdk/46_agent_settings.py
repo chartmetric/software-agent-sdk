@@ -33,7 +33,7 @@ settings = OpenHandsAgentSettings(
         Tool(name=TerminalTool.name),
         Tool(name=FileEditorTool.name),
     ],
-    condenser=LLMSummarizingCondenserSettings(enabled=True, max_size=50),
+    condenser=LLMSummarizingCondenserSettings(enabled=True, max_tokens=50_000),
 )
 
 # ── 2. Serialize → JSON → deserialize ────────────────────────────────────
@@ -43,8 +43,9 @@ print(json.dumps(payload, indent=2, default=str)[:800], "…")
 print()
 
 restored = OpenHandsAgentSettings.model_validate(payload)
+assert isinstance(restored.condenser, LLMSummarizingCondenserSettings)
 assert restored.condenser.enabled is True
-assert restored.condenser.max_size == 50
+assert restored.condenser.max_tokens == 50_000
 assert restored.tools is not None and len(restored.tools) == 2
 print("✓ Roundtrip deserialization successful — all fields preserved")
 print()

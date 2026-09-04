@@ -114,7 +114,7 @@ These tests stress test the condensation system's interaction with LLM APIs to e
 
 **Purpose:** Validate that conversation condensation works correctly across different models and API patterns, particularly focusing on:
 - Model-specific features (e.g., thinking blocks in Claude Opus)
-- Condensation triggers (token limits, event counts, explicit requests)
+- Condensation triggers (token limits and explicit requests)
 - Conversation history management
 - API signature compatibility after condensation
 
@@ -130,18 +130,10 @@ These tests stress test the condensation system's interaction with LLM APIs to e
   - Explicit condense() calls trigger a hard context reset when no valid range exists
   - The hard context reset condenses all events in the view (summary_offset=0)
   - The conversation can continue successfully after the hard context reset
-- **c03_delayed_condensation** - Tests delayed condensation with soft requirements. Verifies that:
-  - Soft requirements (resource limits) gracefully continue when condensation is unavailable
-  - Conversation continues without crashing when condensation can't be satisfied
-  - Condensation succeeds once multiple atomic units make it available
 - **c04_token_condenser** - Tests that token-based condensation works correctly. Verifies that:
   - An agent can be configured with LLMSummarizingCondenser using max_tokens
   - The condenser correctly uses get_token_count to measure conversation size
   - Condensation is triggered when token limit is exceeded
-- **c05_size_condenser** - Tests that size-based condensation works correctly. Verifies that:
-  - An agent can be configured with LLMSummarizingCondenser using max_size
-  - The condenser correctly counts events to measure conversation size
-  - Condensation is triggered when event count limit is exceeded
 
 ## Writing Integration Tests
 

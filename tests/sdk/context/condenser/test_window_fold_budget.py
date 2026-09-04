@@ -46,10 +46,10 @@ def test_the_output_allowance_is_reserved() -> None:
 
 
 def test_an_unknown_window_derives_nothing() -> None:
-    """Without a window there is no budget, and max_size stays the only trigger.
+    """Without a window there is no automatic trigger.
 
-    That is the behaviour every caller had before a budget could be derived, so
-    an unknown window must not start folding on a guess.
+    An unknown window must not start folding on a guessed token or event limit;
+    callers can still request condensation explicitly.
     """
     assert _window_fold_budget(None) is None
     assert _window_fold_budget(_llm(None, None)) is None

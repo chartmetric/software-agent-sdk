@@ -132,8 +132,7 @@ def test_llm_agent_settings_export_schema_groups_sections() -> None:
     assert [
         choice.value for choice in condenser_fields["condenser.condenser_kind"].choices
     ] == ["llm_summarizing", "no_op"]
-    assert condenser_fields["condenser.max_size"].depends_on == ["condenser.enabled"]
-    assert condenser_fields["condenser.max_size"].prominence is SettingProminence.MINOR
+    assert "condenser.max_size" not in condenser_fields
     assert condenser_fields["condenser.max_tokens"].default is None
     assert condenser_fields["condenser.max_tokens"].depends_on == ["condenser.enabled"]
     assert (
@@ -958,7 +957,7 @@ def test_llm_create_agent_builds_condenser_when_enabled() -> None:
 
     assert agent.llm is llm
     assert isinstance(agent.condenser, LLMSummarizingCondenser)
-    assert agent.condenser.max_size == 100
+    assert agent.condenser.model_dump()["max_size"] == 100
     assert agent.condenser.max_tokens == 5000
     assert agent.condenser.keep_first == 3
     assert agent.condenser.minimum_progress == 0.2
@@ -993,7 +992,8 @@ def test_openhands_agent_settings_defaults_legacy_condenser_payload() -> None:
 
     assert isinstance(settings.condenser, LLMSummarizingCondenserSettings)
     assert settings.condenser.condenser_kind == "llm_summarizing"
-    assert settings.condenser.max_size == 100
+    assert settings.condenser.__dict__["max_size"] == 100
+    assert settings.condenser.model_dump()["max_size"] == 100
     assert settings.condenser.max_tokens == 5000
 
 
@@ -1021,7 +1021,8 @@ def test_openhands_agent_settings_upgrades_base_condenser_settings_instance() ->
     )
 
     assert isinstance(settings.condenser, LLMSummarizingCondenserSettings)
-    assert settings.condenser.max_size == 100
+    assert settings.condenser.__dict__["max_size"] == 100
+    assert settings.condenser.model_dump()["max_size"] == 100
 
 
 def test_condenser_settings_base_requires_concrete_build_method() -> None:

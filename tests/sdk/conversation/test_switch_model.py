@@ -16,6 +16,8 @@ from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
     ConversationState,
 )
+from openhands.sdk.event.base import Event
+from openhands.sdk.event.condenser import CondensationRequest
 from openhands.sdk.event.llm_convertible import MessageEvent
 from openhands.sdk.llm import Message, MessageToolCall, TextContent, llm_profile_store
 from openhands.sdk.llm.llm_profile_store import LLMProfileStore
@@ -382,7 +384,6 @@ def test_switch_llm_refreshes_llm_condenser_credentials(
     initial_condenser_llm.reset_metrics()
     condenser = LLMSummarizingCondenser(
         llm=initial_condenser_llm,
-        max_size=100,
         keep_first=2,
     )
     conv = LocalConversation(
@@ -440,7 +441,6 @@ def test_switch_llm_condenser_can_generate_condensation(
     initial_llm = LLM(model="litellm_proxy/old-model", usage_id="default")
     condenser = LLMSummarizingCondenser(
         llm=initial_llm.model_copy(update={"usage_id": "condenser"}),
-        max_size=6,
         keep_first=1,
     )
     conv = LocalConversation(
@@ -465,8 +465,10 @@ def test_switch_llm_condenser_can_generate_condensation(
     monkeypatch.setattr("openhands.sdk.llm.llm.litellm_completion", _fake_completion)
 
     assert isinstance(conv.agent.condenser, LLMSummarizingCondenser)
+    events: list[Event] = [_message_event(f"event {i}") for i in range(12)]
+    events.append(CondensationRequest())
     condensation = conv.agent.condenser.get_condensation(
-        View.from_events([_message_event(f"event {i}") for i in range(12)]),
+        View.from_events(events),
         agent_llm=conv.agent.llm,
     )
 
@@ -489,7 +491,6 @@ def test_switch_llm_preserves_independent_condenser_profile(
     )
     condenser = LLMSummarizingCondenser(
         llm=independent_condenser_llm,
-        max_size=100,
         keep_first=2,
     )
     conv = LocalConversation(
@@ -628,7 +629,7 @@ def test_duplicate_usage_ids_in_registration_loop_are_silently_deduped(tmp_path)
         model="gpt-4o-mini", api_key=SecretStr("test-key"), usage_id="default"
     )
     condenser_llm = agent_llm.model_copy()  # inherits usage_id="default"
-    condenser = LLMSummarizingCondenser(llm=condenser_llm, max_size=100, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=condenser_llm, keep_first=2)
     agent = Agent(llm=agent_llm, condenser=condenser, tools=[])
 
     conv = LocalConversation(agent=agent, workspace=tmp_path)
@@ -699,7 +700,6 @@ def test_switch_llm_to_subscription_profile_disables_condenser(
 
     condenser = LLMSummarizingCondenser(
         llm=_make_llm("condenser-model", "condenser"),
-        max_size=100,
         keep_first=5,
     )
     conv = LocalConversation(

@@ -41,12 +41,9 @@ class HardContextResetTest(BaseIntegrationTest):
         condenser_llm = self.create_llm_copy("test-condenser-llm")
         return LLMSummarizingCondenser(
             llm=condenser_llm,
-            max_size=100,  # High to prevent automatic triggering
             # keep_first=4 ensures that when we have sufficient events (5+),
             # a normal condensation can occur (keeping first 4, condensing the rest).
             # With fewer events, condensation will still trigger hard reset.
-            # Validation requires: max_size // 2 - keep_first - 1 > 0
-            # With max_size=100: 100 // 2 - 4 - 1 = 45 > 0 ✓
             keep_first=4,
         )
 

@@ -2,7 +2,7 @@
 
 The condenser is one of the systems used by OpenHands to manage the context window.
 
-At regular intervals, or when requested by the agent or a user, the context window is condensed by replacing the first half of all events with a single summary event. This strategy performs well in benchmarks and strikes a balance between:
+Under token pressure, or when requested by the agent or a user, the context window is condensed by replacing the first half of all events with a single summary event. This strategy performs well in benchmarks and strikes a balance between:
 1. **Per-completion cost**: by regularly condensing, the context window stays bounded and completions use less tokens.
 2. **Cache optimization**: condensation destroys the prompt cache, but doing so regularly keeps the cost of rebuilding the prompt cache low.
 3. **Early context**: events are summarized, and summaries are also summarized in future condensations, so important information stays in the context.
@@ -23,7 +23,7 @@ Of course, now the agent cannot just grab all instances of `LLMConvertibleEvent`
 ## Triggering Condensation
 
 Condensation is triggered in two main cases:
-1. A resource limit is reached ([`max_tokens` or `max_size`](llm_summarizing_condenser.py)) in the current view, or
+1. The [`max_tokens`](llm_summarizing_condenser.py) budget is reached in the current view, or
 2. An explicit condensation request is made.
 
 The condensation requests can be made by a user (see [`Conversation.condense`](../../conversation/base.py)) or by the agent. Agents will request a condensation when they detect issues with the context window. These issues vary by model and provider -- we do our best to capture as many cases as possible in [`is_context_window_exceeded`](../../llm/exceptions/classifier.py).
@@ -32,6 +32,4 @@ The condensation requests can be made by a user (see [`Conversation.condense`](.
 
 Condensation is not always possible. The LLM expects a certain structure to the messages (see the [view properties](../view/properties/) and the [API compliance tests](../../../../../tests/integration/tests/)), and sometimes the default condensation strategy will necessarily violate that structure.
 
-When that happens, the condenser has to determine if condensation is _needed_ right now or if we're just trying to maintain our upper bound on the size of the context. In the latter situation the condenser just returns the view uncondensed. Since the resource limit condensation trigger is still satisfied, the condenser will just try again the next time the agent takes a step. These condensation triggers are "soft".
-
-If condensation is explicitly requested, the conversation is often in a state that cannot proceed without condensation (e.g., context window exceptions). Skipping and trying on the next step is not an option: there won't _be_ a next step. These are "hard" condensation triggers, and when our balanced condensation isn't an option we forget-and-summarize the entire view in a hard context reset (see [`LLMSummarizingCondenser.hard_context_reset`](llm_summarizing_condenser.py) for an implementation).
+Both token pressure and explicit requests are hard requirements: the conversation may be unable to make another model call without reducing its context. When the balanced condensation is not available, the condenser forgets and summarizes the entire view in a hard context reset (see [`LLMSummarizingCondenser.hard_context_reset`](llm_summarizing_condenser.py) for an implementation).

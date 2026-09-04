@@ -167,17 +167,9 @@ class CondenserSettings(BaseModel):
         default=240,
         ge=20,
         description=(
-            "Maximum number of events kept before the condenser runs. "
-            "Kept on the base settings class for compatibility; concrete "
-            "condenser-settings variants may opt out when this does not apply."
+            "Deprecated compatibility field. Event count does not trigger condensation."
         ),
-        json_schema_extra={
-            SETTINGS_METADATA_KEY: SettingsFieldMetadata(
-                label="Max size",
-                prominence=SettingProminence.MINOR,
-                depends_on=("enabled",),
-            ).model_dump()
-        },
+        json_schema_extra={"deprecated": True},
     )
 
     def build_condenser(self, llm: LLM) -> CondenserBase | None:
@@ -203,7 +195,7 @@ class LLMSummarizingCondenserSettings(CondenserSettings):
         gt=0,
         description=(
             "Maximum number of tokens allowed before the condenser runs. "
-            "When unset, condensation is only based on event count."
+            "When unset, the budget is derived from the agent model's context window."
         ),
         json_schema_extra={
             SETTINGS_METADATA_KEY: SettingsFieldMetadata(

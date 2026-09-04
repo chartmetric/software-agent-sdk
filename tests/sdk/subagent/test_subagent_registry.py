@@ -910,13 +910,13 @@ def test_factory_noop_condenser_disables_condensation() -> None:
 def test_factory_explicit_condenser_passthrough() -> None:
     custom = LLMSummarizingCondenser(
         llm=_make_test_llm().model_copy(update={"usage_id": "custom-condenser"}),
-        max_size=40,
+        max_tokens=40_000,
         keep_first=2,
     )
     factory = agent_definition_to_factory(AgentDefinition(name="x", condenser=custom))
     agent = factory(_make_test_llm())
     assert isinstance(agent.condenser, LLMSummarizingCondenser)
-    assert agent.condenser.max_size == 40
+    assert agent.condenser.max_tokens == 40_000
 
 
 def test_factory_explicit_condenser_fresh_per_spawn() -> None:
@@ -925,7 +925,7 @@ def test_factory_explicit_condenser_fresh_per_spawn() -> None:
     normalized so condenser tokens aren't deduped out of stats."""
     custom = LLMSummarizingCondenser(
         llm=_make_test_llm(),  # same usage_id as the agent -> must be normalized
-        max_size=40,
+        max_tokens=40_000,
         keep_first=2,
     )
     factory = agent_definition_to_factory(AgentDefinition(name="x", condenser=custom))
@@ -942,14 +942,14 @@ def test_factory_explicit_condenser_fresh_per_spawn() -> None:
     # Colliding usage_id normalized; config preserved through the copy.
     assert c1.llm.usage_id == "condenser"
     assert c1.llm.usage_id != a1.llm.usage_id
-    assert c1.max_size == 40
+    assert c1.max_tokens == 40_000
 
 
 def test_factory_explicit_condenser_preserves_distinct_usage_id() -> None:
     """A condenser usage_id that already differs from the agent's is kept."""
     custom = LLMSummarizingCondenser(
         llm=_make_test_llm().model_copy(update={"usage_id": "my-condenser"}),
-        max_size=40,
+        max_tokens=40_000,
         keep_first=2,
     )
     factory = agent_definition_to_factory(AgentDefinition(name="x", condenser=custom))

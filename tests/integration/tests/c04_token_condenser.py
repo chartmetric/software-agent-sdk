@@ -62,13 +62,10 @@ class TokenCondenserTest(BaseIntegrationTest):
 
     @property
     def condenser(self) -> LLMSummarizingCondenser:
-        """Configure a token-based condenser with low limits to trigger condensation."""
-        # Create a condenser with a low token limit to trigger condensation
-        # Using max_tokens instead of max_size to test token counting
+        """Configure a low token limit to trigger condensation."""
         condenser_llm = self.create_llm_copy("test-condenser-llm")
         return LLMSummarizingCondenser(
             llm=condenser_llm,
-            max_size=1000,  # Set high so it doesn't trigger on event count
             max_tokens=5000,  # Low token limit to ensure condensation triggers
             keep_first=1,  # Keep only initial user message (not tool loop start)
         )

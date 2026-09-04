@@ -2855,7 +2855,7 @@ class LocalConversation(BaseConversation):
                 "    llm=your_llm,\n"
                 "    condenser=LLMSummarizingCondenser(\n"
                 "        llm=your_llm,\n"
-                "        max_size=120,\n"
+                "        max_tokens=80_000,\n"
                 "        keep_first=4\n"
                 "    )\n"
                 ")"

@@ -1,3 +1,4 @@
+import warnings
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -110,42 +111,30 @@ def test_default_values(mock_llm: LLM) -> None:
     """
     condenser = LLMSummarizingCondenser(llm=mock_llm)
 
-    # Raised to 960 once a token budget derived from the model's own window
-    # took over as the trigger that actually fires; this is now a backstop for
-    # a conversation of very many very small events.
-    assert condenser.max_size == 960
+    # Retained only so callers with the deprecated argument still load.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        assert condenser.max_size == 960
+    assert condenser.model_dump(exclude={"llm"})["max_size"] == 960
 
     # Default keep_first should be 2 (reduced from 4 to leave more room for
     # condensation)
     assert condenser.keep_first == 2
 
 
-def test_should_condense(mock_llm: LLM) -> None:
-    """Test that LLMSummarizingCondenser correctly determines when to condense."""
-    max_size = 100
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=max_size)
+def test_event_count_does_not_trigger_condensation(mock_llm: LLM) -> None:
+    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=20)
+    events = [message_event(f"Event {i}") for i in range(21)]
 
-    # Create events below the threshold
-    small_events = [message_event(f"Event {i}") for i in range(max_size)]
-    small_view = View.from_events(small_events)
-
-    assert condenser.condensation_requirement(small_view) is None
-
-    # Create events above the threshold (triggers EVENTS reason -> SOFT requirement)
-    large_events = [message_event(f"Event {i}") for i in range(max_size + 1)]
-    large_view = View.from_events(large_events)
-
-    assert (
-        condenser.condensation_requirement(large_view) == CondensationRequirement.SOFT
-    )
+    assert condenser.condensation_requirement(View.from_events(events)) is None
 
 
 def test_condense_returns_view_when_no_condensation_needed(mock_llm: LLM) -> None:
     """Test that condenser returns the original view when no condensation is needed."""  # noqa: E501
-    max_size = 100
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=max_size)
+    event_count = 100
+    condenser = LLMSummarizingCondenser(llm=mock_llm)
 
-    events: list[Event] = [message_event(f"Event {i}") for i in range(max_size)]
+    events: list[Event] = [message_event(f"Event {i}") for i in range(event_count)]
     view = View.from_events(events)
 
     result = condenser.condense(view)
@@ -158,16 +147,14 @@ def test_condense_returns_view_when_no_condensation_needed(mock_llm: LLM) -> Non
 
 def test_condense_returns_condensation_when_needed(mock_llm: LLM) -> None:
     """Test that condenser returns a Condensation when condensation is needed."""
-    max_size = 10
     keep_first = 3
-    condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=max_size, keep_first=keep_first
-    )
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=keep_first)
 
     # Set up mock response
     cast(Any, mock_llm).set_mock_response_content("Summary of forgotten events")
 
-    events: list[Event] = [message_event(f"Event {i}") for i in range(max_size + 1)]
+    events: list[Event] = [message_event(f"Event {i}") for i in range(11)]
+    events.append(CondensationRequest())
     view = View.from_events(events)
 
     result = condenser.condense(view)
@@ -187,20 +174,13 @@ def test_condense_returns_condensation_when_needed(mock_llm: LLM) -> None:
 
 def test_get_condensation_with_previous_summary(mock_llm: LLM) -> None:
     """Test that condenser properly handles previous summary content."""
-    max_size = 10
     keep_first = 3
-    condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=max_size, keep_first=keep_first
-    )
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=keep_first)
 
     # Set up mock response
     cast(Any, mock_llm).set_mock_response_content("Updated summary")
 
-    # Create events with a condensation in the history
-    # Need enough events so that after condensation, the view still exceeds max_size
-    # Condensation will remove 2 events (events[3] and events[4]) plus itself
-    # So we need at least max_size + 1 + 3 = 14 events to exceed max_size after
-    # condensation
+    # Create events with a condensation in the history.
     events = [message_event(f"Event {i}") for i in range(14)]
 
     # Add a condensation to simulate previous summarization
@@ -211,9 +191,10 @@ def test_get_condensation_with_previous_summary(mock_llm: LLM) -> None:
         summary_offset=keep_first,
         llm_response_id="condensation_response_1",
     )
-    events_with_condensation = (
-        events[:keep_first] + [condensation] + events[keep_first:]
-    )
+    events_with_condensation: list[Event] = list(events[:keep_first])
+    events_with_condensation.append(condensation)
+    events_with_condensation.extend(events[keep_first:])
+    events_with_condensation.append(CondensationRequest())
 
     view = View.from_events(events_with_condensation)
 
@@ -247,9 +228,10 @@ def test_invalid_config(mock_llm: LLM) -> None:
     with pytest.raises(ValueError):
         LLMSummarizingCondenser(llm=mock_llm, keep_first=-1)
 
-    # Test keep_first must be less than max_size // 2 to leave room for condensation
-    with pytest.raises(ValueError):
-        LLMSummarizingCondenser(llm=mock_llm, max_size=10, keep_first=8)
+    # max_size no longer constrains keep_first because event count is ignored.
+    assert (
+        LLMSummarizingCondenser(llm=mock_llm, max_size=10, keep_first=8).keep_first == 8
+    )
 
 
 def test_get_condensation_does_not_pass_extra_body(mock_llm: LLM) -> None:
@@ -258,10 +240,10 @@ def test_get_condensation_does_not_pass_extra_body(mock_llm: LLM) -> None:
     This prevents providers like 1p Anthropic from rejecting the request with
     "extra_body: Extra inputs are not permitted".
     """
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=10, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
 
-    # Prepare a view that triggers condensation (len > max_size)
     events: list[Event] = [message_event(f"Event {i}") for i in range(12)]
+    events.append(CondensationRequest())
     view = View.from_events(events)
 
     result = condenser.condense(view)
@@ -274,18 +256,17 @@ def test_get_condensation_does_not_pass_extra_body(mock_llm: LLM) -> None:
 
 def test_condense_with_agent_llm(mock_llm: LLM) -> None:
     """Test that condenser accepts and works with optional agent llm parameter."""
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=10, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
 
     # Create a separate mock for the agent's LLM
     agent_llm = MagicMock(spec=LLM)
     agent_llm.model = "gpt-4"
-    # An unknown window leaves max_size as the only trigger, which is what this
-    # test is about; a MagicMock would otherwise stand in for the token count.
+    # A MagicMock would otherwise stand in for the token count.
     agent_llm.effective_max_input_tokens = None
     agent_llm.effective_max_output_tokens = None
 
-    # Prepare a view that triggers condensation
     events: list[Event] = [message_event(f"Event {i}") for i in range(12)]
+    events.append(CondensationRequest())
     view = View.from_events(events)
 
     # Call condense with the agent's LLM
@@ -307,7 +288,7 @@ def test_condense_with_token_limit_exceeded(mock_llm: LLM) -> None:
     max_tokens = 100
     keep_first = 2
     condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=1000, max_tokens=max_tokens, keep_first=keep_first
+        llm=mock_llm, max_tokens=max_tokens, keep_first=keep_first
     )
 
     # Create a separate mock for the agent's LLM with token counting
@@ -336,7 +317,6 @@ def test_condense_with_token_limit_exceeded(mock_llm: LLM) -> None:
     # Verify that TOKENS is the condensation reason
     reasons = condenser.get_condensation_reasons(view, agent_llm=agent_llm)
     assert Reason.TOKENS in reasons
-    assert Reason.EVENTS not in reasons  # Should not trigger on event count
     assert Reason.REQUEST not in reasons
 
     # Condense the view
@@ -351,50 +331,31 @@ def test_condense_with_token_limit_exceeded(mock_llm: LLM) -> None:
     assert len(result.forgotten_event_ids) > 0
 
 
-def test_condense_with_request_and_events_reasons(mock_llm: LLM) -> None:
-    """Test condensation when both REQUEST and EVENTS reasons are true simultaneously.
+def test_condense_with_derived_token_limit(mock_llm: LLM) -> None:
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
+    agent_llm = MagicMock(spec=LLM)
+    agent_llm.model = "small-context-model"
+    agent_llm.effective_max_input_tokens = 100
+    agent_llm.effective_max_output_tokens = 0
 
-    Verifies that the most aggressive condensation (minimum suffix) is chosen.
-    """
-    max_size = 20
-    keep_first = 2
-    condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=max_size, keep_first=keep_first
-    )
+    def mock_token_count(messages, **_kwargs):
+        return (
+            sum(
+                len(content.text)
+                for message in messages
+                for content in message.content
+                if isinstance(content, TextContent)
+            )
+            // 4
+        )
 
-    # Create events that exceed max_size AND include a condensation request
-    # 25 events > max_size of 20 (triggers EVENTS)
-    # Plus a CondensationRequest (triggers REQUEST)
-    events: list[Event] = [message_event(f"Event {i}") for i in range(25)]
-    events.append(CondensationRequest())
-    view = View.from_events(events)
+    cast(MagicMock, agent_llm.get_token_count).side_effect = mock_token_count
+    view = View.from_events([message_event("A" * 40) for _ in range(15)])
 
-    # Verify both reasons are present
-    reasons = condenser.get_condensation_reasons(view, agent_llm=None)
-    assert Reason.REQUEST in reasons
-    assert Reason.EVENTS in reasons
-    assert Reason.TOKENS not in reasons
+    result = condenser.condense(view, agent_llm=agent_llm)
 
-    # Get the condensation
-    result = condenser.condense(view)
     assert isinstance(result, Condensation)
-
-    # Calculate expected behavior:
-    # REQUEST: target_size = len(view) // 2 = 25 // 2 = 12
-    #          suffix_to_keep = 12 - keep_first - 1 = 12 - 2 - 1 = 9
-    # EVENTS:  target_size = max_size // 2 = 20 // 2 = 10
-    #          suffix_to_keep = 10 - keep_first - 1 = 10 - 2 - 1 = 7
-    # Most aggressive: min(9, 7) = 7
-
-    # With manipulation indices for MessageEvents:
-    # naive_start = keep_first = 2
-    # naive_end = 25 - 7 = 18
-    # manipulation_indices = [0, 1, 2, 3, ..., 25]
-    # forgetting_start = smallest index >= keep_first = 2
-    # forgetting_end = smallest index >= naive_end = 18
-    # Forgotten: events[2:18] = 16 events
-    expected_forgotten_count = 16
-    assert len(result.forgotten_event_ids) == expected_forgotten_count
+    assert result.forgotten_event_ids
 
 
 def test_condense_with_request_and_tokens_reasons(mock_llm: LLM) -> None:
@@ -405,7 +366,7 @@ def test_condense_with_request_and_tokens_reasons(mock_llm: LLM) -> None:
     max_tokens = 100
     keep_first = 2
     condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=1000, max_tokens=max_tokens, keep_first=keep_first
+        llm=mock_llm, max_tokens=max_tokens, keep_first=keep_first
     )
 
     # Create a separate mock for the agent's LLM with token counting
@@ -434,7 +395,6 @@ def test_condense_with_request_and_tokens_reasons(mock_llm: LLM) -> None:
     reasons = condenser.get_condensation_reasons(view, agent_llm=agent_llm)
     assert Reason.REQUEST in reasons
     assert Reason.TOKENS in reasons
-    assert Reason.EVENTS not in reasons
 
     # Get the condensation
     result = condenser.condense(view, agent_llm=agent_llm)
@@ -442,143 +402,6 @@ def test_condense_with_request_and_tokens_reasons(mock_llm: LLM) -> None:
 
     # The most aggressive condensation should be chosen (minimum suffix)
     assert len(result.forgotten_event_ids) > 0
-
-
-def test_condense_with_events_and_tokens_reasons(mock_llm: LLM) -> None:
-    """Test condensation when both EVENTS and TOKENS reasons are true simultaneously.
-
-    Verifies that the most aggressive condensation (minimum suffix) is chosen.
-    """
-    max_size = 15
-    max_tokens = 100
-    keep_first = 2
-    condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=max_size, max_tokens=max_tokens, keep_first=keep_first
-    )
-
-    # Create a separate mock for the agent's LLM with token counting
-    agent_llm = MagicMock(spec=LLM)
-    agent_llm.model = "gpt-4"
-
-    def mock_token_count(messages, **_kwargs):
-        total_chars = 0
-        for msg in messages:
-            for content in msg.content:
-                if hasattr(content, "text"):
-                    total_chars += len(content.text)
-        return total_chars // 4
-
-    cast(MagicMock, agent_llm.get_token_count).side_effect = mock_token_count
-
-    # Create 20 events (exceeds max_size of 15) with 40 chars each
-    # 20 events * 10 tokens = 200 tokens (exceeds max_tokens of 100)
-    events: list[Event] = [message_event("A" * 40) for i in range(20)]
-    view = View.from_events(events)
-
-    # Verify both reasons are present
-    reasons = condenser.get_condensation_reasons(view, agent_llm=agent_llm)
-    assert Reason.EVENTS in reasons
-    assert Reason.TOKENS in reasons
-    assert Reason.REQUEST not in reasons
-
-    # Get the condensation
-    result = condenser.condense(view, agent_llm=agent_llm)
-    assert isinstance(result, Condensation)
-
-    # The most aggressive condensation should be chosen (minimum suffix)
-    assert len(result.forgotten_event_ids) > 0
-
-
-def test_condense_with_all_three_reasons(mock_llm: LLM) -> None:
-    """Test condensation when all three reasons are true simultaneously.
-
-    Verifies that the most aggressive condensation (minimum suffix) is chosen
-    when REQUEST, EVENTS, and TOKENS all trigger at once.
-    """
-    max_size = 15
-    max_tokens = 100
-    keep_first = 2
-    condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=max_size, max_tokens=max_tokens, keep_first=keep_first
-    )
-
-    # Create a separate mock for the agent's LLM with token counting
-    agent_llm = MagicMock(spec=LLM)
-    agent_llm.model = "gpt-4"
-
-    def mock_token_count(messages, **_kwargs):
-        total_chars = 0
-        for msg in messages:
-            for content in msg.content:
-                if hasattr(content, "text"):
-                    total_chars += len(content.text)
-        return total_chars // 4
-
-    cast(MagicMock, agent_llm.get_token_count).side_effect = mock_token_count
-
-    # Create 20 events (exceeds max_size of 15) with 40 chars each
-    # 20 events * 10 tokens = 200 tokens (exceeds max_tokens of 100)
-    events: list[Event] = [message_event("A" * 40) for i in range(20)]
-    # Add CondensationRequest (triggers REQUEST)
-    events.append(CondensationRequest())
-    view = View.from_events(events)
-
-    # Verify all three reasons are present
-    reasons = condenser.get_condensation_reasons(view, agent_llm=agent_llm)
-    assert Reason.REQUEST in reasons
-    assert Reason.EVENTS in reasons
-    assert Reason.TOKENS in reasons
-
-    # Get the condensation
-    result = condenser.condense(view, agent_llm=agent_llm)
-    assert isinstance(result, Condensation)
-
-    # The most aggressive condensation should be chosen (minimum suffix)
-    # This means the most events should be forgotten
-    assert len(result.forgotten_event_ids) > 0
-
-    # Verify the condenser used its own LLM for summarization
-    completion_mock = cast(MagicMock, mock_llm.completion)
-    assert completion_mock.call_count == 1
-
-
-def test_most_aggressive_condensation_chosen(mock_llm: LLM) -> None:
-    """Test that the minimum suffix is chosen when multiple reasons provide different
-    targets.
-
-    This test explicitly verifies the min() logic at line 200 of the condenser.
-    """
-    max_size = 30  # Set high so EVENTS triggers with specific target
-    keep_first = 2
-    condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=max_size, keep_first=keep_first
-    )
-
-    # Create a scenario where REQUEST and EVENTS give different suffix sizes
-    # 40 events total
-    events: list[Event] = [message_event(f"Event {i}") for i in range(40)]
-    events.append(CondensationRequest())
-    view = View.from_events(events)
-
-    # Calculate expected suffix lengths:
-    # REQUEST: target_size = len(view) // 2 = 40 // 2 = 20
-    #          suffix_to_keep = 20 - keep_first - 1 = 20 - 2 - 1 = 17
-    # EVENTS:  target_size = max_size // 2 = 30 // 2 = 15
-    #          suffix_to_keep = 15 - keep_first - 1 = 15 - 2 - 1 = 12
-    # Most aggressive: min(17, 12) = 12
-
-    result = condenser.condense(view)
-    assert isinstance(result, Condensation)
-
-    # With manipulation indices for MessageEvents:
-    # naive_start = keep_first = 2
-    # naive_end = 40 - 12 = 28
-    # manipulation_indices = [0, 1, 2, 3, ..., 40]
-    # forgetting_start = smallest index >= keep_first = 2
-    # forgetting_end = smallest index >= naive_end = 28
-    # Forgotten events: events[2:28] = 26 events
-    expected_forgotten_count = 26
-    assert len(result.forgotten_event_ids) == expected_forgotten_count
 
 
 def test_generate_condensation_raises_on_zero_events(mock_llm: LLM) -> None:
@@ -588,7 +411,7 @@ def test_generate_condensation_raises_on_zero_events(mock_llm: LLM) -> None:
     produce a confusing summary like "I don't see any events provided to summarize."
     See https://github.com/OpenHands/software-agent-sdk/issues/1518 for context.
     """
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=100, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
 
     with pytest.raises(AssertionError, match="No events to condense"):
         condenser._generate_condensation(
@@ -611,7 +434,7 @@ def test_condensation_requirement_returns_none(
 
     Mocks get_condensation_reasons to test different reason combinations.
     """
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=100, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
     events: list[Event] = [message_event(f"Event {i}") for i in range(10)]
     view = View.from_events(events)
 
@@ -625,39 +448,14 @@ def test_condensation_requirement_returns_none(
 @pytest.mark.parametrize(
     "reasons",
     [
-        {Reason.EVENTS},
-    ],
-)
-def test_condensation_requirement_returns_soft(
-    mock_llm: LLM, reasons: set[Reason]
-) -> None:
-    """Test that condensation_requirement returns SOFT for resource constraints.
-
-    Mocks get_condensation_reasons to test different resource reason combinations.
-    """
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=100, keep_first=2)
-    events: list[Event] = [message_event(f"Event {i}") for i in range(10)]
-    view = View.from_events(events)
-
-    with patch.object(
-        LLMSummarizingCondenser, "get_condensation_reasons", return_value=reasons
-    ):
-        result = condenser.condensation_requirement(view)
-        assert result == CondensationRequirement.SOFT
-
-
-@pytest.mark.parametrize(
-    "reasons",
-    [
         {Reason.TOKENS},
-        {Reason.TOKENS, Reason.EVENTS},
     ],
 )
 def test_condensation_requirement_returns_hard_for_token_pressure(
     mock_llm: LLM, reasons: set[Reason]
 ) -> None:
     """Token pressure should trigger before the next LLM request can overflow."""
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=100, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
     events: list[Event] = [message_event(f"Event {i}") for i in range(10)]
     view = View.from_events(events)
 
@@ -673,8 +471,6 @@ def test_condensation_requirement_returns_hard_for_token_pressure(
     [
         {Reason.REQUEST},
         {Reason.REQUEST, Reason.TOKENS},
-        {Reason.REQUEST, Reason.EVENTS},
-        {Reason.REQUEST, Reason.TOKENS, Reason.EVENTS},
     ],
 )
 def test_condensation_requirement_returns_hard(
@@ -684,7 +480,7 @@ def test_condensation_requirement_returns_hard(
 
     Mocks get_condensation_reasons to test different combinations with REQUEST.
     """
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=100, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
     events: list[Event] = [message_event(f"Event {i}") for i in range(10)]
     view = View.from_events(events)
 
@@ -705,7 +501,7 @@ def test_condense_with_hard_requirement_and_no_condensation_available(
     """
     from openhands.sdk.context.condenser.base import NoCondensationAvailableException
 
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=100, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
     events: list[Event] = [message_event(f"Event {i}") for i in range(10)]
     view = View.from_events(events)
 
@@ -722,34 +518,6 @@ def test_condense_with_hard_requirement_and_no_condensation_available(
     ):
         with pytest.raises(NoCondensationAvailableException):
             condenser.condense(view)
-
-
-def test_condense_with_soft_requirement_and_no_condensation_available(
-    mock_llm: LLM,
-) -> None:
-    """Test that condense returns view with soft requirement but no condensation.
-
-    When there's a soft requirement but no valid condensation range available,
-    should return the original view unchanged.
-    """
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=100, keep_first=2)
-    events: list[Event] = [message_event(f"Event {i}") for i in range(10)]
-    view = View.from_events(events)
-
-    # Mock to return SOFT requirement but no events to condense
-    with (
-        patch.object(
-            LLMSummarizingCondenser,
-            "get_condensation_reasons",
-            return_value={Reason.EVENTS},
-        ),
-        patch.object(condenser, "_get_forgotten_events", return_value=([], 0)),
-    ):
-        result = condenser.condense(view)
-        assert isinstance(result, View)
-        assert result == view
-        # LLM should not be called
-        cast(MagicMock, mock_llm.completion).assert_not_called()
 
 
 def test_minimum_progress_default_value(mock_llm: LLM) -> None:
@@ -787,7 +555,7 @@ def test_minimum_progress_threshold_not_met(mock_llm: LLM) -> None:
     """
     # Create a condenser with a high minimum_progress value
     condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=10, keep_first=2, minimum_progress=0.8
+        llm=mock_llm, keep_first=2, minimum_progress=0.8
     )
 
     # Create a view with 100 events
@@ -817,18 +585,14 @@ def test_minimum_progress_threshold_met(mock_llm: LLM) -> None:
     """
     # Use a low minimum_progress so it's easy to meet the threshold
     condenser = LLMSummarizingCondenser(
-        llm=mock_llm, max_size=20, keep_first=2, minimum_progress=0.1
+        llm=mock_llm, keep_first=2, minimum_progress=0.1
     )
 
     # Set up mock response
     cast(Any, mock_llm).set_mock_response_content("Summary of forgotten events")
 
-    # Create enough events to trigger EVENTS reason (more than max_size=20)
-    # With 30 events, target_size = 20 // 2 = 10
-    # suffix_to_keep = 10 - keep_first - 1 = 10 - 2 - 1 = 7
-    # forgotten = 30 - 7 = 23 events
-    # 23/30 = 0.77 > 0.1, so minimum_progress is met
     events: list[Event] = [message_event(f"Event {i}") for i in range(30)]
+    events.append(CondensationRequest())
     view = View.from_events(events)
 
     result = condenser.condense(view)
@@ -839,11 +603,12 @@ def test_minimum_progress_threshold_met(mock_llm: LLM) -> None:
 
 def test_generate_condensation_wraps_llm_errors(mock_llm: LLM) -> None:
     """LLM failures in _generate_condensation raise NoCondensationAvailableException."""  # noqa: E501
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=10, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
 
     cast(MagicMock, mock_llm.completion).side_effect = RuntimeError("boom")
 
     events: list[Event] = [message_event(f"Event {i}") for i in range(12)]
+    events.append(CondensationRequest())
     view = View.from_events(events)
 
     with pytest.raises(NoCondensationAvailableException, match="boom"):
@@ -853,11 +618,12 @@ def test_generate_condensation_wraps_llm_errors(mock_llm: LLM) -> None:
 @pytest.mark.asyncio
 async def test_agenerate_condensation_wraps_llm_errors(mock_llm: LLM) -> None:
     """Async variant: LLM failures surface as NoCondensationAvailableException."""
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=10, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
 
     cast(MagicMock, mock_llm.acompletion).side_effect = RuntimeError("boom")
 
     events: list[Event] = [message_event(f"Event {i}") for i in range(12)]
+    events.append(CondensationRequest())
     view = View.from_events(events)
 
     with pytest.raises(NoCondensationAvailableException, match="boom"):
@@ -866,7 +632,7 @@ async def test_agenerate_condensation_wraps_llm_errors(mock_llm: LLM) -> None:
 
 def test_llm_error_triggers_hard_context_reset(mock_llm: LLM) -> None:
     """A summarizer LLM failure during condense() triggers hard_context_reset."""
-    condenser = LLMSummarizingCondenser(llm=mock_llm, max_size=10, keep_first=2)
+    condenser = LLMSummarizingCondenser(llm=mock_llm, keep_first=2)
 
     # Force a HARD condensation requirement via a CondensationRequest
     events: list[Event] = [message_event(f"Event {i}") for i in range(12)]
@@ -922,9 +688,10 @@ def test_summarization_disables_streaming_when_llm_streams(mock_transport) -> No
     mock_transport.return_value = _summary_response("A summary")
 
     llm = _streaming_llm()
-    condenser = LLMSummarizingCondenser(llm=llm, max_size=10, keep_first=3)
+    condenser = LLMSummarizingCondenser(llm=llm, keep_first=3)
 
     events: list[Event] = [message_event(f"Event {i}") for i in range(11)]
+    events.append(CondensationRequest())
     view = View.from_events(events)
 
     result = condenser.condense(view)
@@ -956,9 +723,10 @@ async def test_async_summarization_disables_streaming_when_llm_streams(
     mock_atransport.return_value = _summary_response("A summary")
 
     llm = _streaming_llm()
-    condenser = LLMSummarizingCondenser(llm=llm, max_size=10, keep_first=3)
+    condenser = LLMSummarizingCondenser(llm=llm, keep_first=3)
 
     events: list[Event] = [message_event(f"Event {i}") for i in range(11)]
+    events.append(CondensationRequest())
     view = View.from_events(events)
 
     result = await condenser.aget_condensation(view)
@@ -982,9 +750,10 @@ def test_summarization_uses_llm_as_is_when_not_streaming(mock_transport) -> None
         usage_id="summarizer-test",
         stream=False,
     )
-    condenser = LLMSummarizingCondenser(llm=llm, max_size=10, keep_first=3)
+    condenser = LLMSummarizingCondenser(llm=llm, keep_first=3)
 
     events: list[Event] = [message_event(f"Event {i}") for i in range(11)]
+    events.append(CondensationRequest())
     view = View.from_events(events)
 
     result = condenser.condense(view)

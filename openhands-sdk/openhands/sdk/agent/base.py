@@ -273,7 +273,7 @@ class AgentBase(DiscriminatedUnionMixin, ABC):
                     "base_url": "https://llm-proxy.eval.all-hands.dev",
                     "api_key": "your_api_key_here",
                 },
-                "max_size": 80,
+                "max_tokens": 80_000,
                 "keep_first": 10,
             }
         ],

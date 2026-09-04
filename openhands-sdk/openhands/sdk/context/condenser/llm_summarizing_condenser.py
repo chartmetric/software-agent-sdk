@@ -32,7 +32,6 @@ class Reason(Enum):
 
     REQUEST = "request"
     TOKENS = "tokens"
-    EVENTS = "events"
 
 
 # Share of the room left for input, after the model's own output allowance, that
@@ -47,8 +46,8 @@ CONTEXT_WINDOW_FOLD_FRACTION = 0.8
 def _window_fold_budget(agent_llm: LLM | None) -> int | None:
     """Tokens a conversation may reach before the window forces a fold.
 
-    ``None`` when the window is unknown, which leaves ``max_size`` as the only
-    trigger -- the behaviour before a budget could be derived at all.
+    ``None`` when the window is unknown. In that case only an explicit
+    condensation request triggers a fold.
     """
     if agent_llm is None:
         return None
@@ -72,21 +71,12 @@ class LLMSummarizingCondenser(RollingCondenser):
     """
 
     llm: LLM
-    max_size: int = Field(default=960, gt=0)
-    """Event count that forces a fold regardless of size.
-
-    A backstop, not the primary trigger. An event count cannot know what a
-    context window holds, and events differ in size by several times, so this
-    number is either too eager or too late for any particular model. The token
-    budget below is the signal that tracks the real constraint; this catches
-    the pathological case of very many very small events.
-
-    Raised from 240 once that budget existed. At 240 it was the trigger that
-    actually fired: measured over production runs at roughly 761 tokens an
-    event, it folded around 183k on a model that accepts 922k, so a fifth of
-    the window forced a summary. What made 240 safe to leave alone before was
-    that nothing else guarded the window; now something does.
-    """
+    max_size: int = Field(
+        default=960,
+        gt=0,
+        json_schema_extra={"deprecated": True},
+    )
+    """Deprecated compatibility field. Event count does not trigger condensation."""
 
     max_tokens: int | None = None
     """Explicit token budget. When unset, one is derived from the agent LLM's
@@ -117,12 +107,7 @@ class LLMSummarizingCondenser(RollingCondenser):
 
     @model_validator(mode="after")
     def validate_keep_first_vs_max_size(self):
-        events_from_tail = self.max_size // 2 - self.keep_first - 1
-        if events_from_tail <= 0:
-            raise ValueError(
-                "keep_first must be less than max_size // 2 to leave room for "
-                "condensation"
-            )
+        """Compatibility hook retained after ``max_size`` became a no-op."""
         return self
 
     @model_validator(mode="after")
@@ -173,10 +158,6 @@ class LLMSummarizingCondenser(RollingCondenser):
                 )
                 reasons.add(Reason.TOKENS)
 
-        # Reason 3: View exceeds maximum size in number of events.
-        if len(view) > self.max_size:
-            reasons.add(Reason.EVENTS)
-
         return reasons
 
     def condensation_requirement(
@@ -190,17 +171,9 @@ class LLMSummarizingCondenser(RollingCondenser):
 
         # Token pressure is a hard requirement in benchmark runs that use a fixed
         # local model context: sending the next request can fail before the recovery
-        # path has a chance to run. Treat event-count pressure as soft because that
-        # threshold is only a history-management heuristic.
+        # path has a chance to run.
         if Reason.TOKENS in reasons:
             return CondensationRequirement.HARD
-
-        # If the remaining reasons are for resource constraints, we can treat them as
-        # a soft requirement. We want to condense when we can, but there's still space
-        # in the context window or we'd also see Reason.REQUEST.
-        resource_reasons = {Reason.EVENTS}
-        if reasons.issubset(resource_reasons):
-            return CondensationRequirement.SOFT
 
         # Requests -- whether they come from the user or the agent -- are always hard
         # requirements. We need to condense now because:
@@ -296,19 +269,15 @@ class LLMSummarizingCondenser(RollingCondenser):
             target_size = len(view) // 2
             suffix_events_to_keep.add(target_size - self.keep_first - 1)
 
-        if Reason.EVENTS in reasons:
-            target_size = self.max_size // 2
-            suffix_events_to_keep.add(target_size - self.keep_first - 1)
-
         if Reason.TOKENS in reasons:
             # Compute the number of tokens we need to eliminate to be under half the
-            # max_tokens value. We know max_tokens and the agent LLM are not None here
-            # because we can't have Reason.TOKENS without them.
-            assert self.max_tokens is not None
+            # token budget. The budget may be explicit or derived from the agent LLM.
             assert agent_llm is not None
+            token_budget = self.max_tokens or _window_fold_budget(agent_llm)
+            assert token_budget is not None
 
             total_tokens = get_total_token_count(view.events, agent_llm)
-            tokens_to_reduce = total_tokens - (self.max_tokens // 2)
+            tokens_to_reduce = total_tokens - (token_budget // 2)
 
             suffix_events_to_keep.add(
                 get_suffix_length_for_token_reduction(
@@ -403,7 +372,7 @@ class LLMSummarizingCondenser(RollingCondenser):
             raise NoCondensationAvailableException(
                 "Cannot condense 0 events. This typically occurs when a tool loop "
                 "spans almost the entire view, leaving no valid range for forgetting "
-                "events. Consider adjusting keep_first or max_size parameters."
+                "events. Consider adjusting keep_first or max_tokens parameters."
             )
 
         if len(forgotten_events) < len(view) * self.minimum_progress:
@@ -479,7 +448,7 @@ class LLMSummarizingCondenser(RollingCondenser):
             raise NoCondensationAvailableException(
                 "Cannot condense 0 events. This typically occurs when a tool loop "
                 "spans almost the entire view, leaving no valid range for "
-                "forgetting events. Consider adjusting keep_first or max_size "
+                "forgetting events. Consider adjusting keep_first or max_tokens "
                 "parameters."
             )
 
@@ -527,14 +496,14 @@ class LLMSummarizingCondenser(RollingCondenser):
         return None
 
 
-# Sizing for the standard summarizing condenser. Kept here so the default agent and
-# spawned sub-agents stay in sync.
-_DEFAULT_MAX_SIZE: Final[int] = 80
+_DEFAULT_LEGACY_MAX_SIZE: Final[int] = 80
 _DEFAULT_KEEP_FIRST: Final[int] = 4
 
 
 def default_condenser(llm: LLM) -> LLMSummarizingCondenser:
     """Standard summarizing condenser used by the default agent and sub-agents."""
     return LLMSummarizingCondenser(
-        llm=llm, max_size=_DEFAULT_MAX_SIZE, keep_first=_DEFAULT_KEEP_FIRST
+        llm=llm,
+        max_size=_DEFAULT_LEGACY_MAX_SIZE,
+        keep_first=_DEFAULT_KEEP_FIRST,
     )

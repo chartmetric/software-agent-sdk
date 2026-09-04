@@ -1,6 +1,6 @@
 """
 To manage context in long-running conversations, the agent can use a context condenser
-that keeps the conversation history within a specified size limit. This example
+that keeps the conversation history within a specified token limit. This example
 demonstrates using the `LLMSummarizingCondenser`, which automatically summarizes
 older parts of the conversation when the history exceeds a defined threshold.
 """
@@ -48,13 +48,13 @@ tools = [
     Tool(name=TaskTrackerTool.name),
 ]
 
-# Create a condenser to manage the context. The condenser will automatically truncate
-# conversation history when it exceeds max_size, and replaces the dropped events with an
-#  LLM-generated summary. This condenser triggers when there are more than ten events in
-# the conversation history, and always keeps the first two events (system prompts,
-# initial user messages) to preserve important context.
+# Create a condenser to manage the context. It replaces older events with an
+# LLM-generated summary after the conversation exceeds the token budget, while
+# preserving the first two events for important initial context.
 condenser = LLMSummarizingCondenser(
-    llm=llm.model_copy(update={"usage_id": "condenser"}), max_size=10, keep_first=2
+    llm=llm.model_copy(update={"usage_id": "condenser"}),
+    max_tokens=2_000,
+    keep_first=2,
 )
 
 # Agent with condenser
@@ -129,7 +129,7 @@ print("=" * 100)
 print("Conversation finished with LLM Summarizing Condenser.")
 print(f"Total LLM messages collected: {len(llm_messages)}")
 print("\nThe condenser automatically summarized older conversation history")
-print("when the conversation exceeded the configured max_size threshold.")
+print("when the conversation exceeded the configured max_tokens threshold.")
 print("This helps manage context length while preserving important information.")
 
 # Report cost
