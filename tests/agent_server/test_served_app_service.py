@@ -123,6 +123,16 @@ def test_configured_worker_ports_follow_the_injected_environment(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("value", "expected"),
+    [("32767", 32767), ("", 65535), ("not-a-port", 65535), ("70000", 65535)],
+)
+def test_configured_autodiscovery_ceiling(monkeypatch, value, expected):
+    monkeypatch.setenv("OH_SERVED_APP_MAX_AUTODISCOVERY_PORT", value)
+
+    assert served_app_service._configured_max_autodiscovery_port() == expected
+
+
+@pytest.mark.parametrize(
     "environment",
     [
         {},
@@ -163,6 +173,34 @@ def test_sandbox_service_ports_are_reserved_from_discovery():
     """The desktop stream answers HTTP, so discovery listed it as a served app."""
     for port in (60000, 60001, 60002):
         assert port in served_app_service.RESERVED_PORTS
+
+
+def test_discovery_ceiling_skips_unregistered_private_protocols(monkeypatch, tmp_path):
+    """Do not send HTTP into ephemeral listeners owned by build tools.
+
+    Gradle worker daemons use private TCP framing on ephemeral ports. The HTTP
+    discovery probe corrupts that framing and can terminate a compile worker.
+    A launcher-registered service above the ceiling remains discoverable.
+    """
+    tcp = tmp_path / "tcp"
+    tcp.write_text(
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when "
+        "retrnsmt   uid  timeout inode\n"
+        "   0: 0100007F:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 "
+        "00000000 1000 0 101\n"
+        "   1: 0100007F:9C40 00000000:0000 0A 00000000:00000000 00:00000000 "
+        "00000000 1000 0 102\n"
+        "   2: 0100007F:C350 00000000:0000 0A 00000000:00000000 00:00000000 "
+        "00000000 1000 0 103\n"
+    )
+    state = tmp_path / "runtime-services"
+    state.mkdir()
+    (state / "registered.port").write_text("50000")
+    monkeypatch.setattr(served_app_service, "PROC_NET_PATHS", (tcp,))
+    monkeypatch.setattr(served_app_service, "RUNTIME_SERVICE_STATE_DIR", state)
+    monkeypatch.setattr(served_app_service, "MAX_AUTODISCOVERY_PORT", 32767)
+
+    assert served_app_service._listening_ports() == {3000, 50000}
 
 
 @pytest.mark.asyncio

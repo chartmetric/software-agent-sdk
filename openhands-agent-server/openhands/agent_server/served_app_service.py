@@ -12,6 +12,7 @@ from openhands.sdk.logger import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_WORKER_PORTS = (8011, 8012)
+DEFAULT_MAX_AUTODISCOVERY_PORT = 65535
 
 
 def _configured_worker_ports() -> tuple[int, ...]:
@@ -36,7 +37,22 @@ def _configured_worker_ports() -> tuple[int, ...]:
     return tuple(ports) if len(ports) == 2 else DEFAULT_WORKER_PORTS
 
 
+def _configured_max_autodiscovery_port() -> int:
+    """Highest unregistered listener that discovery may probe as HTTP.
+
+    The default preserves discovery across the full TCP range. Environments
+    that run build tools with private protocols on ephemeral ports can lower
+    the ceiling; launcher-registered services and worker ports stay eligible.
+    """
+    raw = os.environ.get("OH_SERVED_APP_MAX_AUTODISCOVERY_PORT", "").strip()
+    if not raw.isdigit():
+        return DEFAULT_MAX_AUTODISCOVERY_PORT
+    port = int(raw)
+    return port if 0 < port < 65536 else DEFAULT_MAX_AUTODISCOVERY_PORT
+
+
 WORKER_PORTS = _configured_worker_ports()
+MAX_AUTODISCOVERY_PORT = _configured_max_autodiscovery_port()
 DISCOVERY_INTERVAL_SECONDS = 2
 PROBE_TIMEOUT_SECONDS = 1
 # A busy dev server (Turbopack compiling, SSR under load) can stall its accept
@@ -111,6 +127,7 @@ class _DiscoveredApp:
 
 def _listening_ports() -> set[int]:
     ports: set[int] = set()
+    explicit_ports = set(WORKER_PORTS) | _repository_service_ports()
     for path in PROC_NET_PATHS:
         if not path.exists():
             continue
@@ -118,7 +135,9 @@ def _listening_ports() -> set[int]:
             fields = line.split()
             if len(fields) < 4 or fields[3] != "0A":
                 continue
-            ports.add(int(fields[1].rsplit(":", 1)[1], 16))
+            port = int(fields[1].rsplit(":", 1)[1], 16)
+            if port <= MAX_AUTODISCOVERY_PORT or port in explicit_ports:
+                ports.add(port)
     return ports - RESERVED_PORTS
 
 
