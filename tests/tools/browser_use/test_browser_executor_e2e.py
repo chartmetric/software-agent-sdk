@@ -420,7 +420,27 @@ class TestBrowserExecutorE2E:
         assert match["text"] == "You've reached section 2!"
         assert match["heading"] == "Section 2"
         assert match["y"] > 1000
+        assert "index" not in match, "a paragraph is not clickable"
         assert json.loads(after.text)["scroll"] == json.loads(before.text)["scroll"]
+
+    def test_find_names_the_index_click_takes_for_an_interactive_match(
+        self, browser_executor: BrowserToolExecutor, test_server: str
+    ):
+        browser_executor(BrowserNavigateAction(url=test_server))
+        state = json.loads(
+            browser_executor(BrowserGetStateAction(include_screenshot=False)).text
+        )
+        link = next(
+            element
+            for element in state["interactive_elements"]
+            if element.get("text") == "Go to Section 2"
+        )
+
+        result = browser_executor(BrowserFindAction(text="Go to Section 2"))
+
+        assert not result.is_error
+        matches = json.loads(result.text)["matches"]
+        assert [match["index"] for match in matches] == [link["index"]]
 
     def test_find_bounds_work_on_a_large_matching_document(
         self, browser_executor: BrowserToolExecutor, test_server: str

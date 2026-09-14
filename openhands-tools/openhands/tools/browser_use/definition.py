@@ -678,7 +678,11 @@ BROWSER_FIND_DESCRIPTION = """Find visible rendered text anywhere in the current
 
 Returns the deepest matching elements with their text, semantic heading context,
 absolute page position, and whether each match is above, inside, or below the
-viewport. It searches the rendered document rather than scripts or hidden data.
+viewport. A match that is, or sits inside, an interactive element the last
+`get_state` numbered carries that number as `index`: click it by that index rather
+than guessing from the element list. A match with no `index` is not interactive,
+or the state has not been read since the page changed -- read it and find again.
+It searches the rendered document rather than scripts or hidden data.
 
 Use this before concluding a named section, label, value, error, or empty state is
 absent. A missing result can still mean a deferred section has not rendered; inspect

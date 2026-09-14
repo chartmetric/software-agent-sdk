@@ -150,9 +150,20 @@ FIND_VISIBLE_TEXT_SCRIPT = r"""
     }
     return closest.slice(0, 160);
   };
+  // The number the last state read gave the interactive element the match
+  // is, or sits inside -- the number `click` takes. Without it a run that
+  // found the text still had to guess the index from the element list, and
+  // guessed the sidebar: three 30-second click timeouts on one page.
+  const INDEX = 'data-oh-browser-index';
+  const indexOf = (element) => {
+    const carrier = element.closest('[' + INDEX + ']');
+    if (!carrier) return null;
+    const value = Number.parseInt(carrier.getAttribute(INDEX) || '', 10);
+    return Number.isNaN(value) ? null : value;
+  };
   const matches = deepest.map((element) => {
     const rect = element.getBoundingClientRect();
-    return {
+    const match = {
       tag: element.tagName.toLowerCase(),
       role: (element.getAttribute('role') || '').slice(0, 80),
       text: normalizedText(element).slice(0, 240),
@@ -161,6 +172,9 @@ FIND_VISIBLE_TEXT_SCRIPT = r"""
       location: location(rect),
       heading: headingFor(element),
     };
+    const index = indexOf(element);
+    if (index !== null) match.index = index;
+    return match;
   });
   return {
     query: needle,
