@@ -646,6 +646,38 @@ def test_executor_exposes_browser_metadata_and_navigation_policy():
         executor.close()
 
 
+def test_executor_exposes_stable_frame_wait_on_the_browser_thread():
+    with patch.object(
+        BrowserToolExecutor, "_ensure_chromium_available", return_value="/chrome"
+    ):
+        executor = BrowserToolExecutor()
+    try:
+        executor._ensure_initialized = AsyncMock()
+        executor._server.wait_for_stable_frame = AsyncMock(return_value=True)
+
+        assert executor.wait_for_stable_frame() is True
+
+        executor._server.wait_for_stable_frame.assert_awaited_once_with()
+    finally:
+        executor.close()
+
+
+def test_stable_frame_wait_failure_does_not_replace_the_browser_result():
+    with patch.object(
+        BrowserToolExecutor, "_ensure_chromium_available", return_value="/chrome"
+    ):
+        executor = BrowserToolExecutor()
+    try:
+        executor._ensure_initialized = AsyncMock()
+        executor._server.wait_for_stable_frame = AsyncMock(
+            side_effect=RuntimeError("CDP target closed")
+        )
+
+        assert executor.wait_for_stable_frame() is False
+    finally:
+        executor.close()
+
+
 def test_sensitive_values_are_cumulative_and_redact_native_observations():
     with patch.object(
         BrowserToolExecutor, "_ensure_chromium_available", return_value="/chrome"

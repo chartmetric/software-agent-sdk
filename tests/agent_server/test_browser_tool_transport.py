@@ -15,12 +15,14 @@ from openhands.agent_server.dependencies import get_event_service
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.tool import ToolExecutor
 from openhands.tools.browser_use.definition import (
+    BrowserGetStateTool,
     BrowserNavigateAction,
     BrowserNavigateTool,
     BrowserObservation,
     BrowserSequenceTool,
     BrowserTypeTool,
 )
+from openhands.tools.browser_use.impl import BrowserToolExecutor
 
 
 def test_browser_call_uses_native_schema_and_preserves_original_frame():
@@ -82,6 +84,59 @@ def test_browser_call_uses_native_schema_and_preserves_original_frame():
     assert isinstance(action, BrowserNavigateAction)
     assert action.url == "https://example.test"
     assert executor.call_args.args[1] is conversation
+
+
+def test_browser_call_settles_local_cdp_before_the_requested_capture():
+    expected = BrowserObservation.from_text(
+        text='{"url":"https://example.test"}', screenshot_data="cGl4ZWxz"
+    )
+    settled = False
+
+    def wait_for_stable_frame():
+        nonlocal settled
+        settled = True
+        return True
+
+    def run_native(action, conversation):
+        assert settled
+        return expected
+
+    executor = Mock(spec=BrowserToolExecutor, side_effect=run_native)
+    executor.wait_for_stable_frame.side_effect = wait_for_stable_frame
+    (tool,) = BrowserGetStateTool.create(executor)
+    conversation = SimpleNamespace(
+        state=SimpleNamespace(execution_status=ConversationExecutionStatus.IDLE),
+        _state=threading.Lock(),
+    )
+    service = Mock()
+    service.get_conversation.return_value = conversation
+    app = FastAPI()
+    app.include_router(conversation_router)
+    app.dependency_overrides[get_event_service] = lambda: service
+
+    with (
+        patch(
+            "openhands.tools.browser_use.definition.BrowserToolSet.create",
+            return_value=[tool],
+        ),
+        patch(
+            "openhands.tools.browser_use.definition.BrowserToolSet.get_or_create_shared_executor",
+            return_value=executor,
+        ),
+        TestClient(app) as client,
+    ):
+        result = client.post(
+            f"/conversations/{uuid4()}/browser/call",
+            json={
+                "tool_name": tool.name,
+                "arguments": {"include_screenshot": True},
+                "settle_before_capture": True,
+            },
+        )
+
+    assert result.status_code == 200
+    assert result.json() == expected.model_dump(mode="json")
+    executor.wait_for_stable_frame.assert_called_once_with()
 
 
 @pytest.mark.parametrize(

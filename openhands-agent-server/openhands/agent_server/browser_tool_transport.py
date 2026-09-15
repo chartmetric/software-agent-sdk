@@ -33,6 +33,10 @@ type BrowserJSONValue = (
 class BrowserToolCallRequest(BaseModel):
     tool_name: str = Field(min_length=1)
     arguments: dict[str, BrowserJSONValue] = Field(default_factory=dict)
+    settle_before_capture: bool = Field(
+        default=False,
+        description="Wait for stable compositor pixels before invoking the tool.",
+    )
     preview_url: HttpUrl | None = Field(
         default=None, description="Workspace Preview origin for credential references."
     )
@@ -116,6 +120,8 @@ def call_browser_tool(
             ) from exc
         assert isinstance(action, BrowserAction)
         _require_credential_origin(request, action)
+        if request.settle_before_capture:
+            BrowserToolSet.get_or_create_shared_executor().wait_for_stable_frame()
         observation = tool(action, conversation=conversation)
         assert isinstance(observation, BrowserObservation)
         return observation

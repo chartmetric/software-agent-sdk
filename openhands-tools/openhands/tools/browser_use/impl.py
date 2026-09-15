@@ -1161,6 +1161,19 @@ class BrowserToolExecutor(ToolExecutor[BrowserAction, BrowserObservation]):
 
         return self._async_executor.run_async(read)
 
+    def wait_for_stable_frame(self) -> bool:
+        """Wait for stable compositor pixels on the browser thread."""
+
+        async def wait() -> bool:
+            await self._ensure_initialized()
+            return await self._server.wait_for_stable_frame()
+
+        try:
+            return self._async_executor.run_async(wait)
+        except Exception:
+            logger.debug("Stable frame wait failed", exc_info=True)
+            return False
+
     def start_screencast(
         self, on_frame: Callable[[str, dict[str, Any]], None], **kwargs: Any
     ) -> bool:

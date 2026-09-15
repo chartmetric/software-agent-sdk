@@ -349,6 +349,36 @@ async def test_switching_pages_rebinds_the_cdp_target(playwright_runtime):
 
 
 @pytest.mark.asyncio
+async def test_stable_frame_wait_reads_pixels_directly_from_cdp(playwright_runtime):
+    starter, _, _, context, page = playwright_runtime
+    cdp = MagicMock()
+    cdp.send = AsyncMock(
+        side_effect=[
+            {"data": "drawing"},
+            {"data": "settled"},
+            {"data": "settled"},
+        ]
+    )
+    context.new_cdp_session = AsyncMock(return_value=cdp)
+    server = PlaywrightBrowserServer()
+
+    with patch(
+        "openhands.tools.browser_use.playwright_server.async_playwright",
+        return_value=starter,
+    ):
+        await server.start(headless=True, executable_path="/usr/bin/chromium")
+        settled = await server.wait_for_stable_frame(sample_count=4, interval_seconds=0)
+
+    assert settled is True
+    assert cdp.send.await_count == 3
+    cdp.send.assert_awaited_with(
+        "Page.captureScreenshot",
+        {"format": "jpeg", "quality": 75, "fromSurface": True},
+    )
+    page.screenshot.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_content_is_bounded_and_names_the_continuation(playwright_runtime):
     starter, _, _, _, page = playwright_runtime
     body = MagicMock()

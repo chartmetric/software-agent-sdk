@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import fnmatch
 import json
@@ -693,6 +694,27 @@ class PlaywrightBrowserServer:
             self._cdp_session = await self._require_context().new_cdp_session(page)
             self._cdp_page = page
         return self._cdp_session
+
+    async def wait_for_stable_frame(
+        self, sample_count: int = 4, interval_seconds: float = 0.4
+    ) -> bool:
+        """Wait until two compositor captures match, within a fixed budget."""
+        cdp = await self.cdp_session()
+        previous: str | None = None
+        for sample in range(sample_count):
+            frame = await cdp.send(
+                "Page.captureScreenshot",
+                {"format": "jpeg", "quality": 75, "fromSurface": True},
+            )
+            current = frame.get("data")
+            if not isinstance(current, str):
+                raise RuntimeError("CDP screenshot response was invalid")
+            if current == previous:
+                return True
+            previous = current
+            if sample + 1 < sample_count:
+                await asyncio.sleep(interval_seconds)
+        return False
 
     async def start_recording(self, output_dir: str | None = None) -> str:
         if self._recording_session is None:
