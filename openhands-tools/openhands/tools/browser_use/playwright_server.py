@@ -92,15 +92,24 @@ _STATE_SCRIPT = r"""
   cache.elements = new Map();
   cache.guards = new Map();
   cache.rendered = rendered;
+  // What the element *is*, not what it currently reads. Holding the node
+  // itself already settles identity, so a label that re-renders -- a count in
+  // a tab, "Follow" becoming "Following", a spinner in a button -- is the same
+  // control and must still be clickable. What this catches is the node being
+  // kept and repurposed: a different tag, role, accessible name or href under
+  // the number the model was given. jev's own guard carries the value and the
+  // surrounding text too, because its loop re-observes after every step and
+  // pays nothing for a re-read; here a refusal costs the run a model call, so
+  // it is spent only on an element that has become something else.
   cache.guard = (element) => [
     element.tagName.toLowerCase(),
     (element.getAttribute('role') || '').slice(0, 80),
     (element.getAttribute('aria-label') ||
       element.getAttribute('placeholder') || '').slice(0, 240),
-    (element.innerText || element.value || '')
-      .trim().replace(/\s+/g, ' ').slice(0, 240),
     (element.getAttribute('href') || '').slice(0, 240),
   ];
+  cache.label = (element) => (element.innerText || element.value || '')
+    .trim().replace(/\s+/g, ' ').slice(0, 80);
   const interactive = candidates.map((element, index) => {
     element.setAttribute(INDEX, String(index));
     cache.elements.set(index, element);
@@ -192,8 +201,8 @@ _ELEMENT_GUARD_SCRIPT = r"""
   const then = cache.guards.get(index);
   const now = cache.guard(element);
   if (JSON.stringify(now) !== JSON.stringify(then)) {
-    return {status: 'changed', was: then[3] || then[2] || then[0],
-            is: now[3] || now[2] || now[0]};
+    return {status: 'changed', was: then[2] || then[1] || then[0],
+            is: cache.label(element) || now[2] || now[1] || now[0]};
   }
   if (element.matches(':disabled') ||
       element.closest('[aria-disabled="true"],[inert]')) {

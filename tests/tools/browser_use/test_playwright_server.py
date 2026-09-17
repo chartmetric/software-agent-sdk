@@ -655,3 +655,45 @@ async def test_an_action_on_an_element_the_page_no_longer_offers_refuses_at_once
         assert await live.title() != "clicked", "the click was not made"
     finally:
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_a_label_that_re_renders_is_still_the_control_it_was():
+    """Holding the node settles identity, so a changed label is not a new element.
+
+    Live pages rewrite the text inside a control constantly -- a count in a tab,
+    "Follow" becoming "Following", a spinner while something loads. Refusing
+    those would cost the run a model call to read a page that never moved, so
+    the guard asks what the element *is* (tag, role, accessible name, href) and
+    lets the reading drift. A node kept and repurposed is still refused.
+    """
+    executable = BrowserToolExecutor.check_chromium_available()
+    if executable is None:
+        pytest.skip("Chromium is not installed")
+    server = PlaywrightBrowserServer()
+    try:
+        await server.start(headless=True, executable_path=executable)
+        page = await server.get_current_page()
+        await page.set_content(
+            "<button id='follow' onclick=\"document.title='clicked'\">Follow</button>"
+        )
+        state = json.loads(await server.get_browser_state(include_screenshot=False))
+        index = state["interactive_elements"][0]["index"]
+
+        # The same node, relabelled by the page itself.
+        await page.evaluate(
+            "document.getElementById('follow').textContent = 'Following (1)'"
+        )
+        assert await server.click(index) == f"Clicked element {index}"
+        assert await page.title() == "clicked"
+
+        # The same node, turned into a different control.
+        await page.evaluate(
+            "const b = document.getElementById('follow');"
+            "b.setAttribute('role', 'link');"
+            "b.setAttribute('aria-label', 'Delete account');"
+        )
+        with pytest.raises(StaleElementError, match="belongs to something else"):
+            await server.click(index)
+    finally:
+        await server.close()
