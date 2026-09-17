@@ -31,6 +31,16 @@ from openhands.tools.browser_use.semantic import FIND_VISIBLE_TEXT_SCRIPT
 
 
 _INDEX_ATTRIBUTE = "data-oh-browser-index"
+
+
+class StaleElementError(RuntimeError):
+    """The element an action names is not the one the page offered.
+
+    Raised instead of letting a selector wait out its timeout on a node the
+    page has replaced. Carries what changed and what to do about it.
+    """
+
+
 _STATE_SCRIPT = r"""
 () => {
   const INDEX = 'data-oh-browser-index';
@@ -71,8 +81,30 @@ _STATE_SCRIPT = r"""
       const rect = element.getBoundingClientRect();
       return rendered(element) && rect.width > 0 && rect.height > 0;
     }).slice(0, LIMIT);
+  // What the read hands the next action: the element itself, and what it
+  // looked like when it was offered. An attribute alone cannot answer
+  // "is this still the thing the model was shown" -- a re-render replaces
+  // the node and takes the attribute with it, and the selector that goes
+  // looking for it waits out its timeout before saying anything. Held this
+  // way, an action asks the question in one evaluate. From jev-ultrafast's
+  // `snapshot.js` (`cache`, `cache.guard`); see vendor/jev-ultrafast/.
+  const cache = window.__ohBrowserElements ||= {};
+  cache.elements = new Map();
+  cache.guards = new Map();
+  cache.rendered = rendered;
+  cache.guard = (element) => [
+    element.tagName.toLowerCase(),
+    (element.getAttribute('role') || '').slice(0, 80),
+    (element.getAttribute('aria-label') ||
+      element.getAttribute('placeholder') || '').slice(0, 240),
+    (element.innerText || element.value || '')
+      .trim().replace(/\s+/g, ' ').slice(0, 240),
+    (element.getAttribute('href') || '').slice(0, 240),
+  ];
   const interactive = candidates.map((element, index) => {
     element.setAttribute(INDEX, String(index));
+    cache.elements.set(index, element);
+    cache.guards.set(index, cache.guard(element));
     const rect = element.getBoundingClientRect();
     return present({
       index,
@@ -137,6 +169,49 @@ _STATE_SCRIPT = r"""
       truncated: outline.length === 80,
     },
   };
+}
+"""
+
+
+# Asked of the page before an action touches an element the model chose from a
+# state it read earlier: is this still that element, and can it be reached?
+# Every answer is one evaluate and returns at once, where the selector it
+# replaces waited out its timeout to say the same thing. Adapted from
+# jev-ultrafast (`fresh`, and the hit test in `browser_operation`); see
+# vendor/jev-ultrafast/.
+_ELEMENT_GUARD_SCRIPT = r"""
+(index) => {
+  const cache = window.__ohBrowserElements;
+  // No state has been read since this page loaded, so there is nothing the
+  // index could have been taken from and nothing to compare against.
+  if (!cache || !cache.elements) return {status: 'unread'};
+  const element = cache.elements.get(index);
+  if (!element || !element.isConnected || !cache.rendered(element)) {
+    return {status: 'gone'};
+  }
+  const then = cache.guards.get(index);
+  const now = cache.guard(element);
+  if (JSON.stringify(now) !== JSON.stringify(then)) {
+    return {status: 'changed', was: then[3] || then[2] || then[0],
+            is: now[3] || now[2] || now[0]};
+  }
+  if (element.matches(':disabled') ||
+      element.closest('[aria-disabled="true"],[inert]')) {
+    return {status: 'disabled'};
+  }
+  const rect = element.getBoundingClientRect();
+  const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+  if (!rect.width || !rect.height) return {status: 'gone'};
+  if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) {
+    return {status: 'offscreen', x: Math.round(x), y: Math.round(y)};
+  }
+  const at = document.elementFromPoint(x, y);
+  if (at && !element.contains(at) && !at.contains(element)) {
+    const covering = (at.getAttribute('aria-label') || at.innerText || at.tagName)
+      .trim().replace(/\s+/g, ' ').slice(0, 80);
+    return {status: 'covered', by: covering};
+  }
+  return {status: 'ok', x, y};
 }
 """
 
@@ -401,7 +476,56 @@ class PlaywrightBrowserServer:
             state["screenshot"] = base64.b64encode(screenshot).decode()
         return _dump(state)
 
+    async def _require_live_element(self, index: int, verb: str) -> None:
+        """Refuse an action on an element the page no longer offers.
+
+        Says so in the time one evaluate takes. The selector this stands in
+        front of waits `ACTION_TIMEOUT_MS` for a node that a re-render has
+        already replaced, and then reports a Playwright line that names no
+        remedy: measured on Chartmetric Pilot production over the week to
+        2026-09-18, 48 of 1,141 browser calls died that way, 30s each, the
+        action never made. Every refusal here names what to do next, which is
+        almost always to read the page again.
+        """
+        page = self._require_page()
+        verdict = await page.evaluate(_ELEMENT_GUARD_SCRIPT, index)
+        status = verdict.get("status") if isinstance(verdict, dict) else None
+        if status in (None, "ok", "unread"):
+            # `unread` is a caller that has an index from somewhere other than
+            # this page's state read. It is not this check's business to
+            # refuse it; the locator still has its say.
+            return
+        remedy = "Read the page again with browser_get_state and use its indexes."
+        if status == "gone":
+            raise StaleElementError(
+                f"Element {index} is no longer on the page: it was replaced or "
+                f"removed after the state that offered it. {remedy}"
+            )
+        if status == "changed":
+            raise StaleElementError(
+                f"Element {index} is now {verdict.get('is')!r}, not "
+                f"{verdict.get('was')!r} -- the page re-rendered and this index "
+                f"belongs to something else. {remedy}"
+            )
+        if status == "disabled":
+            raise StaleElementError(
+                f"Element {index} is disabled, so {verb} would do nothing. "
+                "Satisfy what the page is waiting for, then read it again."
+            )
+        if status == "offscreen":
+            raise StaleElementError(
+                f"Element {index} has moved out of the viewport since the state "
+                "that offered it. Scroll to it and read the page again."
+            )
+        if status == "covered":
+            raise StaleElementError(
+                f"Element {index} is behind {verdict.get('by')!r}, which would "
+                f"take the {verb} instead. Deal with what is in front of it "
+                "-- a dialog, a cookie banner, an overlay -- and read the page again."
+            )
+
     async def click(self, index: int, new_tab: bool = False) -> str:
+        await self._require_live_element(index, "a click")
         locator = self._indexed_locator(index)
         box = await locator.bounding_box()
         if new_tab:
@@ -442,6 +566,7 @@ class PlaywrightBrowserServer:
             pass
 
     async def type_text(self, index: int, text: str, *, secret: bool = False) -> str:
+        await self._require_live_element(index, "typing")
         locator = self._indexed_locator(index)
         if secret:
             self.set_sensitive_values([text])

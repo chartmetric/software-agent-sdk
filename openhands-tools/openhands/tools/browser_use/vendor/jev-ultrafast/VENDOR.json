@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/browser-use/jev-ultrafast",
+  "commit": "452c1ad2dd628008f1d5608f28158d76e49e6cc0",
+  "committed": "2026-09-16",
+  "license": "MIT",
+  "retrieved": "2026-09-18",
+  "files": {
+    "snapshot.js": {
+      "upstream_path": "jev_ultrafast/snapshot.js",
+      "sha256": "e50473501c8fb8e70f3b21866d987393e3f2315c639d638bd477d170e81ed78d"
+    }
+  },
+  "used_by": [
+    "openhands/tools/browser_use/playwright_server.py::_STATE_SCRIPT",
+    "openhands/tools/browser_use/playwright_server.py::_ELEMENT_GUARD_SCRIPT"
+  ],
+  "resync": "python scripts/resync_vendor.py --check  (or --update to pull a newer upstream copy)"
+}

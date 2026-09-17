@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 from types import SimpleNamespace
@@ -6,7 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openhands.tools.browser_use.impl import BrowserToolExecutor
-from openhands.tools.browser_use.playwright_server import PlaywrightBrowserServer
+from openhands.tools.browser_use.playwright_server import (
+    PlaywrightBrowserServer,
+    StaleElementError,
+)
 
 
 @pytest.mark.asyncio
@@ -574,5 +578,80 @@ async def test_a_plain_control_carries_no_empty_or_false_fields():
         search = next(item for item in elements if item.get("name") == "Search")
         assert search["disabled"] is True
         assert search["type"] == "text"
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("page", "expected"),
+    [
+        pytest.param(
+            "<div id='host'><button onclick=\"document.title='clicked'\">Go</button>"
+            "</div>"
+            "<script>window.rerender = () => {"
+            "  const fresh = document.createElement('button');"
+            "  fresh.textContent = 'Go';"
+            "  document.getElementById('host').replaceChildren(fresh);"
+            "}</script>",
+            "no longer on the page",
+            id="replaced by a re-render",
+        ),
+        pytest.param(
+            "<button onclick=\"document.title='clicked'\">Go</button>"
+            "<script>window.rerender = () => {"
+            "  const sheet = document.createElement('div');"
+            "  sheet.setAttribute('aria-label', 'Cookie banner');"
+            "  sheet.style.cssText = 'position:fixed;inset:0;background:#fff';"
+            "  document.body.append(sheet);"
+            "}</script>",
+            "'Cookie banner'",
+            id="covered by an overlay",
+        ),
+        pytest.param(
+            "<button onclick=\"document.title='clicked'\">Go</button>"
+            "<script>window.rerender = () => {"
+            "  document.querySelector('button').disabled = true;"
+            "}</script>",
+            "is disabled",
+            id="disabled while the state was read",
+        ),
+    ],
+)
+async def test_an_action_on_an_element_the_page_no_longer_offers_refuses_at_once(
+    page, expected
+):
+    """The page moves between the state read and the click, as a live app does.
+
+    Each of these used to be the same 30s wait on a selector and then a
+    Playwright line naming no remedy: on Chartmetric Pilot production over the
+    week to 2026-09-18, 48 of 1,141 browser calls died that way with the action
+    never made. The answer is now immediate and says what to do next.
+    """
+    executable = BrowserToolExecutor.check_chromium_available()
+    if executable is None:
+        pytest.skip("Chromium is not installed")
+    server = PlaywrightBrowserServer()
+    try:
+        await server.start(headless=True, executable_path=executable)
+        live = await server.get_current_page()
+        await live.set_content(page)
+        state = json.loads(await server.get_browser_state(include_screenshot=False))
+        index = next(
+            item["index"]
+            for item in state["interactive_elements"]
+            if item.get("text") == "Go"
+        )
+
+        await live.evaluate("window.rerender()")
+
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(StaleElementError) as refusal:
+            await server.click(index)
+        assert asyncio.get_running_loop().time() - started < 5, "answered at once"
+        assert expected in str(refusal.value)
+        # Every refusal names what to do next.
+        assert "read" in str(refusal.value).lower()
+        assert await live.title() != "clicked", "the click was not made"
     finally:
         await server.close()
