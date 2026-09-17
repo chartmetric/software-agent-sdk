@@ -373,6 +373,9 @@ def test_completion_telemetry_callback_masks_live_secret_context():
 async def test_browser_server_marks_secret_input_as_sensitive():
     page = MagicMock()
     page.is_closed.return_value = False
+    # Typing asks the page whether element 2 is still the one the state
+    # offered; here it is.
+    page.evaluate = AsyncMock(return_value={"status": "ok"})
     locator = MagicMock()
     locator.fill = AsyncMock()
     page.locator.return_value = locator
