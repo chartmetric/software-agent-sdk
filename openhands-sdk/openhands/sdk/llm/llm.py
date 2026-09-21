@@ -1489,6 +1489,26 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
             raise LLMNoResponseError(
                 "Response choices is less than 1. Response: " + str(resp)
             )
+        choice = resp.choices[0]
+        message = choice.message
+        # LiteLLM can normalize a provider's finish_reason="error" to "stop".
+        # Reasoning alone is not a completed answer: retry the unchanged request
+        # here, before the agent can mistake a failed generation for its own step.
+        # Length limits and content filters need a different remedy, not retries.
+        if choice.finish_reason == "stop" and not (
+            (
+                message.content.strip()
+                if isinstance(message.content, str)
+                else message.content
+            )
+            or message.tool_calls
+            or message.function_call
+            or getattr(message, "refusal", None)
+            or getattr(message, "audio", None)
+        ):
+            raise LLMNoResponseError(
+                f"Response {resp.id} ended without content or a tool call"
+            )
         return resp
 
     # =========================================================================

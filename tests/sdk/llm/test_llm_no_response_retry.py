@@ -1,4 +1,5 @@
-from unittest.mock import AsyncMock, patch
+from typing import Literal
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from litellm.responses.streaming_iterator import (
@@ -43,6 +44,82 @@ def create_empty_choices_response(response_id: str = "empty-1") -> ModelResponse
         object="chat.completion",
         usage=Usage(prompt_tokens=1, completion_tokens=0, total_tokens=1),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("reasoning", [None, "Partial reasoning before disconnect"])
+@pytest.mark.parametrize("content", [None, " \n"])
+async def test_empty_provider_response_retries_the_same_request(
+    asynchronous: bool,
+    reasoning: str | None,
+    content: str | None,
+) -> None:
+    """LiteLLM maps OpenRouter's finish_reason=error to stop, losing the error.
+
+    Pilot 8e1fc0a9 accepted 415s of partial reasoning as a model response,
+    injected corrective feedback and never entered the provider retry ladder.
+    """
+    failed = ModelResponse(
+        id="provider-failure",
+        model="gpt-4o",
+        choices=[
+            {
+                "finish_reason": "error",
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                    "reasoning_content": reasoning,
+                },
+            }
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+    listener = Mock()
+    llm = LLM(
+        model="gpt-4o",
+        api_key=SecretStr("test"),
+        num_retries=2,
+        retry_min_wait=0,
+        retry_max_wait=0,
+        retry_listener=listener,
+    )
+    call = AsyncMock if asynchronous else Mock
+    target = "litellm_acompletion" if asynchronous else "litellm_completion"
+    with patch(
+        f"openhands.sdk.llm.llm.{target}",
+        new_callable=call,
+        side_effect=[failed, create_mock_response("Recovered")],
+    ) as transport:
+        messages = [Message(role="user", content=[TextContent(text="Continue")])]
+        result = (
+            await llm.acompletion(messages)
+            if asynchronous
+            else llm.completion(messages)
+        )
+
+    assert result.message.content == [TextContent(text="Recovered")]
+    assert (
+        transport.call_args_list[0].kwargs["messages"]
+        == (transport.call_args_list[1].kwargs["messages"])
+    )
+    assert isinstance(listener.call_args.args[2], LLMNoResponseError)
+    assert result.metrics.accumulated_token_usage is not None
+    assert result.metrics.accumulated_token_usage.prompt_tokens == 2
+
+
+@pytest.mark.parametrize("finish_reason", ["length", "content_filter"])
+def test_deterministic_empty_response_does_not_retry(
+    finish_reason: Literal["length", "content_filter"],
+) -> None:
+    response = create_mock_response("")
+    response.choices[0].finish_reason = finish_reason
+    llm = LLM(model="gpt-4o", api_key=SecretStr("test"), num_retries=2)
+    with patch(
+        "openhands.sdk.llm.llm.litellm_completion", return_value=response
+    ) as call:
+        llm.completion([Message(role="user", content=[TextContent(text="Continue")])])
+    assert call.call_count == 1
 
 
 @pytest.fixture
