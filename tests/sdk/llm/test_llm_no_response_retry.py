@@ -49,9 +49,11 @@ def create_empty_choices_response(response_id: str = "empty-1") -> ModelResponse
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("reasoning", [None, "Partial reasoning before disconnect"])
+@pytest.mark.parametrize("content", [None, " \n"])
 async def test_empty_provider_response_retries_the_same_request(
     asynchronous: bool,
     reasoning: str | None,
+    content: str | None,
 ) -> None:
     """LiteLLM maps OpenRouter's finish_reason=error to stop, losing the error.
 
@@ -66,7 +68,7 @@ async def test_empty_provider_response_retries_the_same_request(
                 "finish_reason": "error",
                 "message": {
                     "role": "assistant",
-                    "content": None,
+                    "content": content,
                     "reasoning_content": reasoning,
                 },
             }

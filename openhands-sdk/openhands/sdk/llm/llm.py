@@ -1496,7 +1496,11 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         # here, before the agent can mistake a failed generation for its own step.
         # Length limits and content filters need a different remedy, not retries.
         if choice.finish_reason == "stop" and not (
-            message.content
+            (
+                message.content.strip()
+                if isinstance(message.content, str)
+                else message.content
+            )
             or message.tool_calls
             or message.function_call
             or getattr(message, "refusal", None)
