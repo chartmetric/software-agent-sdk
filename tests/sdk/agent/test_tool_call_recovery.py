@@ -5,14 +5,14 @@ Covers two fixes for the Qwen3.5-Flash stuck conversation issue:
 1. JSON argument parsing: raw json.loads first, sanitize_json_control_chars
    as fallback (fixes literal \\n whitespace being incorrectly escaped).
 
-2. Corrective feedback: when the LLM produces no tool call and no content,
-   inject a user message so the model can self-correct instead of silently
-   looping into the monologue stuck detector.
+2. Empty-response recovery: retry an unusable completed response without
+   changing the request; a response truncated by the token limit still gets
+   corrective feedback so the model can self-correct.
 """
 
 import json
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Literal, Self
 from unittest.mock import patch
 
 from litellm import ChatCompletionMessageToolCall
@@ -85,6 +85,8 @@ def _make_agent(*, with_tool: bool = True) -> Agent:
         usage_id="test-llm",
         api_key=SecretStr("test-key"),
         base_url="http://test",
+        retry_min_wait=0,
+        retry_max_wait=0,
     )
     tools = [Tool(name="ViewTool")] if with_tool else []
     return Agent(llm=llm, tools=tools)
@@ -96,6 +98,7 @@ def _model_response(
     *,
     response_id: str = "resp-1",
     reasoning_content: str | None = None,
+    finish_reason: Literal["stop", "length"] = "stop",
 ) -> ModelResponse:
     msg = LiteLLMMessage(
         role="assistant",
@@ -106,7 +109,7 @@ def _model_response(
         msg.reasoning_content = reasoning_content  # type: ignore[attr-defined]
     return ModelResponse(
         id=response_id,
-        choices=[Choices(index=0, message=msg, finish_reason="stop")],
+        choices=[Choices(index=0, message=msg, finish_reason=finish_reason)],
         created=0,
         model="test-model",
         object="chat.completion",
@@ -212,14 +215,15 @@ def test_control_chars_in_string_values_still_sanitized():
 # ── Fix 2: Corrective feedback on empty response ────────────────────────
 
 
-def test_reasoning_only_response_injects_nudge():
-    """When LLM returns reasoning but no tool call / content, inject nudge."""
+def test_reasoning_truncated_by_length_injects_nudge():
+    """A token limit needs corrective feedback rather than a transport retry."""
     agent = _make_agent(with_tool=False)
     conv = Conversation(agent=agent)
 
     resp = _model_response(
         content="",
         reasoning_content="Let me think about this...",
+        finish_reason="length",
     )
 
     events: list[object] = []
@@ -269,15 +273,18 @@ def test_content_response_does_not_inject_nudge():
     assert len(corrective_nudges) == 0
 
 
-def test_completely_empty_response_injects_nudge():
-    """Completely empty responses (no reasoning, no content) get a nudge."""
+def test_completely_empty_response_retries_without_a_nudge():
+    """A failed generation must not be added to the agent's history."""
     agent = _make_agent(with_tool=False)
     conv = Conversation(agent=agent)
 
     resp = _model_response(content="")
 
     events: list[object] = []
-    with patch("openhands.sdk.llm.llm.litellm_completion", return_value=resp):
+    with patch(
+        "openhands.sdk.llm.llm.litellm_completion",
+        side_effect=[resp, _model_response("Recovered")],
+    ) as completion:
         conv.send_message(
             Message(
                 role="user",
@@ -289,5 +296,8 @@ def test_completely_empty_response_injects_nudge():
     corrective_nudges = [
         e for e in events if isinstance(e, MessageEvent) and e.source == "environment"
     ]
-    assert len(corrective_nudges) == 1
-    assert corrective_nudges[0].llm_message.role == "user"
+    assert corrective_nudges == []
+    assert (
+        completion.call_args_list[0].kwargs["messages"]
+        == (completion.call_args_list[1].kwargs["messages"])
+    )
