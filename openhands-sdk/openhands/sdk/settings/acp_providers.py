@@ -316,8 +316,11 @@ _CLAUDE_MODELS: tuple[ACPModelOption, ...] = (
 # ``@agentclientprotocol/codex-acp`` 1.1.2. The reasoning-effort tier is a
 # separate ``reasoning_effort`` configOption, not part of the model id, so it is
 # not encoded here. GPT-5.6 variants are rollout/account-dependent suggestions;
-# the adapter's live model list remains authoritative.
+# the adapter's live model list remains authoritative. GPT-6.1 Sol is served to
+# ChatGPT subscriptions as of 2026-09-30; a subscription that lists it through
+# the endpoint's own model list was otherwise filtered back out by this set.
 _CODEX_MODELS: tuple[ACPModelOption, ...] = (
+    ACPModelOption(id="gpt-6.1-sol", label="GPT-6.1 Sol"),
     ACPModelOption(id="gpt-5.6", label="GPT-5.6"),
     ACPModelOption(id="gpt-5.6-sol", label="GPT-5.6 Sol"),
     ACPModelOption(id="gpt-5.6-terra", label="GPT-5.6 Terra"),

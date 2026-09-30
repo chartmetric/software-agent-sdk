@@ -82,6 +82,7 @@ def test_openai_codex_models():
     )
     assert "gpt-5.6" in OPENAI_CODEX_MODELS
     assert "gpt-5.6-sol" in OPENAI_CODEX_MODELS
+    assert "gpt-6.1-sol" in OPENAI_CODEX_MODELS
     assert "gpt-5.6-terra" in OPENAI_CODEX_MODELS
     assert "gpt-5.6-luna" in OPENAI_CODEX_MODELS
     assert "gpt-5.5" in OPENAI_CODEX_MODELS
