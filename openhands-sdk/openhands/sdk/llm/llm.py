@@ -3219,6 +3219,7 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         - "openai": ChatGPT Plus/Pro subscription for Codex models
 
         Supported OpenAI models:
+        - gpt-6.1-sol
         - gpt-5.6
         - gpt-5.6-sol
         - gpt-5.6-terra

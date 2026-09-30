@@ -1,4 +1,5 @@
 VERIFIED_OPENAI_MODELS = [
+    "gpt-6.1-sol",
     "gpt-5.6",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
