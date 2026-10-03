@@ -76,11 +76,30 @@ _STATE_SCRIPT = r"""
     'a[href]', 'button', 'input', 'textarea', 'select',
     '[role="button"]', '[role="link"]', '[tabindex]'
   ].join(',');
-  const candidates = Array.from(document.querySelectorAll(selector))
+  const visible = Array.from(document.querySelectorAll(selector))
     .filter((element) => {
       const rect = element.getBoundingClientRect();
       return rendered(element) && rect.width > 0 && rect.height > 0;
-    }).slice(0, LIMIT);
+    });
+  // The cap keeps the controls nearest the viewport, then reads them in page
+  // order. Cut in page order, a control on screen at the foot of a long page
+  // was past the first hundred and never numbered, so it could not be clicked:
+  // Pilot conversation 70f6dc20 (2026-10-03), a pager under an artist page's
+  // milestones, which the run then rebuilt on a scratch page to operate.
+  const away = (element) => {
+    const rect = element.getBoundingClientRect();
+    if (rect.bottom < 0) return -rect.bottom;
+    if (rect.top > innerHeight) return rect.top - innerHeight;
+    return 0;
+  };
+  const nearest = new Set(
+    visible
+      .map((element, order) => ({element, order, distance: away(element)}))
+      .sort((a, b) => a.distance - b.distance || a.order - b.order)
+      .slice(0, LIMIT)
+      .map((entry) => entry.element)
+  );
+  const candidates = visible.filter((element) => nearest.has(element));
   // What the read hands the next action: the element itself, and what it
   // looked like when it was offered. An attribute alone cannot answer
   // "is this still the thing the model was shown" -- a re-render replaces

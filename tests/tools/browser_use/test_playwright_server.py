@@ -38,6 +38,45 @@ async def test_browser_state_excludes_zero_area_targets():
         await server.close()
 
 
+@pytest.mark.asyncio
+async def test_an_element_on_screen_past_the_first_hundred_is_numbered():
+    """The cap keeps the elements nearest the viewport, not the first in the page.
+
+    Pilot conversation 70f6dc20 (2026-10-03): a pager at the foot of a long
+    artist page was on screen but past the first hundred controls in document
+    order, so it was never numbered and could not be clicked.
+    """
+    executable = BrowserToolExecutor.check_chromium_available()
+    if executable is None:
+        pytest.skip("Chromium is not installed")
+    server = PlaywrightBrowserServer()
+    try:
+        await server.start(headless=True, executable_path=executable)
+        page = await server.get_current_page()
+        buttons = "".join(
+            f'<button style="display:block;height:40px">Item {n}</button>'
+            for n in range(150)
+        )
+        await page.set_content(
+            buttons + "<button onclick=\"this.textContent='Paged'\">Next</button>"
+        )
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+
+        state = json.loads(await server.get_browser_state(include_screenshot=False))
+
+        texts = [item.get("text") for item in state["interactive_elements"]]
+        assert "Next" in texts
+        assert len(texts) == 100
+        assert "Item 0" not in texts
+        target = next(
+            i for i in state["interactive_elements"] if i.get("text") == "Next"
+        )
+        await server.click(target["index"])
+        assert await page.get_by_role("button", name="Paged").count() == 1
+    finally:
+        await server.close()
+
+
 @pytest.fixture
 def playwright_runtime():
     page = MagicMock()
